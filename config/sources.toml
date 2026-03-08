@@ -1,4 +1,21 @@
 [[source]]
+id = "ngsl"
+name = "NGSL Headwords"
+language = "en"
+category = "lexicon"
+license = "Repository specific"
+homepage = "https://github.com/evan-007/ngsl-dictionary"
+version = "master"
+enabled = true
+
+[[source.files]]
+asset_id = "ngsl-csv"
+url = "https://raw.githubusercontent.com/evan-007/ngsl-dictionary/master/NGSL-Headwords-and-Definitions-byFreq.csv"
+compression = "none"
+extract = "none"
+output_name = "NGSL-Headwords-and-Definitions-byFreq.csv"
+
+[[source]]
 id = "google-10000"
 name = "Google 10000 English"
 language = "en"
@@ -64,6 +81,23 @@ url = "https://www.edrdg.org/kanjidic/kanjidic2.xml.gz"
 compression = "gzip"
 extract = "single_file"
 extract_name = "kanjidic2.xml"
+
+[[source]]
+id = "tatoeba-jpn-eng"
+name = "Tatoeba Japanese-English Examples"
+language = "ja"
+category = "examples"
+license = "CC BY 2.0 FR"
+homepage = "https://github.com/mwhirls/tatoeba-json"
+version = "v0.0.52"
+enabled = true
+
+[[source.files]]
+asset_id = "jpn-eng-examples"
+url = "https://github.com/mwhirls/tatoeba-json/releases/latest/download/jpn-eng-examples.zip"
+compression = "zip"
+extract = "archive"
+extract_dir = "tatoeba-jpn-eng"
 
 [[source]]
 id = "kanjivg"

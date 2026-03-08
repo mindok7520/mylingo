@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS lexemes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_lexemes_language ON lexemes(language_id);
+CREATE INDEX IF NOT EXISTS idx_lexemes_language_lemma ON lexemes(language_id, lemma_normalized);
 CREATE INDEX IF NOT EXISTS idx_lexemes_frequency ON lexemes(frequency_rank);
 CREATE INDEX IF NOT EXISTS idx_lexemes_jlpt ON lexemes(jlpt_level) WHERE jlpt_level IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_lexemes_cefr ON lexemes(cefr_level) WHERE cefr_level IS NOT NULL;
@@ -153,6 +154,8 @@ CREATE TABLE IF NOT EXISTS example_sources (
     PRIMARY KEY (example_id, source_id, source_ref)
 ) WITHOUT ROWID;
 
+CREATE INDEX IF NOT EXISTS idx_example_sources_ref ON example_sources(source_ref);
+
 CREATE TABLE IF NOT EXISTS lexeme_examples (
     lexeme_id            INTEGER NOT NULL REFERENCES lexemes(id) ON DELETE CASCADE,
     example_id           INTEGER NOT NULL REFERENCES examples(id) ON DELETE CASCADE,
@@ -161,6 +164,8 @@ CREATE TABLE IF NOT EXISTS lexeme_examples (
     match_score          REAL NOT NULL DEFAULT 0.0,
     PRIMARY KEY (lexeme_id, example_id)
 ) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_lexeme_examples_example ON lexeme_examples(example_id);
 
 CREATE TABLE IF NOT EXISTS kanji (
     id                   INTEGER PRIMARY KEY,
@@ -194,6 +199,8 @@ CREATE TABLE IF NOT EXISTS kanji_lexemes (
     position_index       INTEGER NOT NULL,
     PRIMARY KEY (kanji_id, lexeme_id, position_index)
 ) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_kanji_lexemes_lexeme ON kanji_lexemes(lexeme_id);
 
 CREATE TABLE IF NOT EXISTS grammar_points (
     id                   INTEGER PRIMARY KEY,
@@ -247,6 +254,8 @@ CREATE TABLE IF NOT EXISTS unit_items (
     item_order           INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (unit_id, item_type, item_id)
 ) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_unit_items_item ON unit_items(item_type, item_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS lexeme_search USING fts5(
     lexeme_id UNINDEXED,

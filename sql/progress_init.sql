@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS study_sessions (
     metadata_json       TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_study_sessions_active ON study_sessions(finished_at, started_at);
+
 CREATE TABLE IF NOT EXISTS review_items (
     id                  INTEGER PRIMARY KEY,
     item_type           TEXT NOT NULL,
@@ -25,6 +27,8 @@ CREATE TABLE IF NOT EXISTS review_items (
     created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(item_type, item_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_review_items_lookup ON review_items(item_type, item_id);
 
 CREATE TABLE IF NOT EXISTS srs_state (
     review_item_id      INTEGER PRIMARY KEY REFERENCES review_items(id) ON DELETE CASCADE,

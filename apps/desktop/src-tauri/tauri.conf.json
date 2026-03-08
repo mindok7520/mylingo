@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LinguaForge",
+  "version": "0.1.0",
+  "identifier": "com.opencode.linguaforge",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "LinguaForge",
+        "width": 1280,
+        "height": 900,
+        "minWidth": 360,
+        "minHeight": 720,
+        "resizable": true
+      }
+    ],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": []
+  }
+}

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use flate2::read::GzDecoder;
 use futures_util::StreamExt;
 use linguaforge_core::manifest::{FetchManifest, FetchedAsset};
@@ -15,6 +15,10 @@ use tokio::io::AsyncWriteExt;
 use tracing::info;
 use zip::ZipArchive;
 
+mod courses;
+mod migrate;
+mod publish;
+mod quality;
 mod stage;
 
 #[derive(Debug, Parser)]
@@ -30,6 +34,10 @@ enum Command {
     Sources(SourcesCommand),
     Fetch(FetchCommand),
     Stage(StageCommand),
+    Migrate(MigrateCommand),
+    Publish(PublishCommand),
+    GenerateCourses(GenerateCoursesCommand),
+    QualityReport(QualityReportCommand),
 }
 
 #[derive(Debug, Args)]
@@ -63,6 +71,42 @@ pub(crate) struct StageCommand {
     force: bool,
 }
 
+#[derive(Debug, Args, Clone)]
+pub(crate) struct MigrateCommand {
+    #[arg(value_enum, default_value_t = DatabaseTarget::All)]
+    target: DatabaseTarget,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct PublishCommand {
+    sources: Vec<String>,
+    #[arg(long)]
+    all: bool,
+    #[arg(long = "no-search-rebuild")]
+    no_search_rebuild: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct GenerateCoursesCommand {
+    #[arg(long)]
+    replace: bool,
+    #[arg(long, default_value_t = 20)]
+    unit_size: u32,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct QualityReportCommand {
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum DatabaseTarget {
+    All,
+    Content,
+    Progress,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -79,6 +123,12 @@ async fn main() -> Result<()> {
         Command::Sources(command) => run_sources(&workspace, command).await,
         Command::Fetch(command) => run_fetch(&workspace, command).await,
         Command::Stage(command) => stage::run_stage(&workspace, command).await,
+        Command::Migrate(command) => migrate::run_migrate(&workspace, command).await,
+        Command::Publish(command) => publish::run_publish(&workspace, command).await,
+        Command::GenerateCourses(command) => {
+            courses::run_generate_courses(&workspace, command).await
+        }
+        Command::QualityReport(command) => quality::run_quality_report(&workspace, command).await,
     }
 }
 
