@@ -1,0 +1,168 @@
+[[source]]
+id = "google-10000"
+name = "Google 10000 English"
+language = "en"
+category = "lexicon"
+license = "Public Domain"
+homepage = "https://github.com/first20hours/google-10000-english"
+version = "master"
+enabled = true
+
+[[source.files]]
+asset_id = "20k"
+url = "https://raw.githubusercontent.com/first20hours/google-10000-english/master/20k.txt"
+compression = "none"
+extract = "none"
+
+[[source]]
+id = "jmdict"
+name = "JMdict English"
+language = "ja"
+category = "lexicon"
+license = "CC BY-SA 3.0"
+homepage = "https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project"
+version = "latest"
+enabled = true
+
+[[source.files]]
+asset_id = "jmdict_e"
+url = "http://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz"
+compression = "gzip"
+extract = "single_file"
+extract_name = "JMdict_e.xml"
+
+[[source]]
+id = "jmdict-examples"
+name = "JMdict with Examples"
+language = "ja"
+category = "examples"
+license = "CC BY-SA 3.0"
+homepage = "https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project"
+version = "latest"
+enabled = true
+
+[[source.files]]
+asset_id = "jmdict_e_examp"
+url = "http://ftp.edrdg.org/pub/Nihongo/JMdict_e_examp.gz"
+compression = "gzip"
+extract = "single_file"
+extract_name = "JMdict_e_examp.xml"
+
+[[source]]
+id = "kanjidic2"
+name = "KANJIDIC2"
+language = "ja"
+category = "kanji"
+license = "CC BY-SA 3.0"
+homepage = "https://www.edrdg.org/wiki/index.php/KANJIDIC_Project"
+version = "latest"
+enabled = true
+
+[[source.files]]
+asset_id = "kanjidic2"
+url = "https://www.edrdg.org/kanjidic/kanjidic2.xml.gz"
+compression = "gzip"
+extract = "single_file"
+extract_name = "kanjidic2.xml"
+
+[[source]]
+id = "kanjivg"
+name = "KanjiVG"
+language = "ja"
+category = "kanji-media"
+license = "CC BY-SA 3.0"
+homepage = "https://github.com/KanjiVG/kanjivg"
+version = "master"
+enabled = true
+
+[[source.files]]
+asset_id = "kanjivg-archive"
+url = "https://github.com/KanjiVG/kanjivg/archive/refs/heads/master.zip"
+compression = "zip"
+extract = "archive"
+extract_dir = "kanjivg"
+
+[[source]]
+id = "jlpt-vocabulary"
+name = "JLPT Vocabulary"
+language = "ja"
+category = "lexicon-levels"
+license = "Repository specific"
+homepage = "https://github.com/Bluskyo/JLPT_Vocabulary"
+version = "master"
+enabled = true
+
+[[source.files]]
+asset_id = "jlpt-vocabulary-archive"
+url = "https://github.com/Bluskyo/JLPT_Vocabulary/archive/refs/heads/master.zip"
+compression = "zip"
+extract = "archive"
+extract_dir = "jlpt-vocabulary"
+
+[[source]]
+id = "bunpou-grammar-db"
+name = "Japanese Grammar DB"
+language = "ja"
+category = "grammar"
+license = "Repository specific"
+homepage = "https://github.com/bunpou/japanese-grammar-db"
+version = "master"
+enabled = true
+
+[[source.files]]
+asset_id = "bunpou-archive"
+url = "https://github.com/bunpou/japanese-grammar-db/archive/refs/heads/master.zip"
+compression = "zip"
+extract = "archive"
+extract_dir = "bunpou-grammar-db"
+
+[[source]]
+id = "kanji-data"
+name = "Kanji Data"
+language = "ja"
+category = "kanji"
+license = "Repository specific"
+homepage = "https://github.com/davidluzgouveia/kanji-data"
+version = "master"
+enabled = true
+
+[[source.files]]
+asset_id = "kanji-data-archive"
+url = "https://github.com/davidluzgouveia/kanji-data/archive/refs/heads/master.zip"
+compression = "zip"
+extract = "archive"
+extract_dir = "kanji-data"
+
+[[source]]
+id = "kanji-alive-media"
+name = "Kanji Alive Media"
+language = "ja"
+category = "kanji-media"
+license = "CC BY 4.0"
+homepage = "https://github.com/kanjialive/kanji-data-media"
+version = "master"
+enabled = true
+
+[[source.files]]
+asset_id = "kanji-alive-media-archive"
+url = "https://github.com/kanjialive/kanji-data-media/archive/refs/heads/master.zip"
+compression = "zip"
+extract = "archive"
+extract_dir = "kanji-alive-media"
+
+[[source]]
+id = "oxford-word-list"
+name = "Oxford Word Lists"
+language = "en"
+category = "lexicon-levels"
+license = "Repository specific"
+homepage = "https://github.com/jnoodle/English-Vocabulary-Word-List"
+version = "master"
+enabled = true
+
+[[source.files]]
+asset_id = "oxford-word-list-archive"
+url = "https://github.com/jnoodle/English-Vocabulary-Word-List/archive/refs/heads/master.zip"
+compression = "zip"
+extract = "archive"
+extract_dir = "oxford-word-list"
