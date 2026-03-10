@@ -40,7 +40,20 @@
 - [x] flashcard / multiple choice / matching 1차 구현
 - [x] 코스 맵 + 유닛 진행도 표시
 - [x] 유치원 스타터 코스(히라가나/가타카나/영어) 구성
+- [x] 홈/학습 페이지 분리와 한국어 중심 UI 구성
+- [x] 단어 학습 / 단어 퀴즈 / 문장 학습 분리
+- [x] 로컬 LLM provider 설정과 예문 생성 연결
+- [x] TTS 기반 발음 재생 연결
 - [ ] progress sync 정책 구현
+
+## Phase 5 - Remote/Mobile Runtime
+
+- [x] HTTP API 서버 초안 (`crates/linguaforge-api`)
+- [x] Tauri command 재사용용 public API wrapper 정리
+- [x] 프론트엔드 로컬 invoke / 원격 HTTP API 전환 레이어 구현
+- [x] Android init / debug build 검증
+- [ ] 원격 연결 상태 점검 UX 추가
+- [ ] API 인증 / 토큰 정책 추가
 
 ## 이번 작업에서 실제로 진행한 것
 
@@ -58,9 +71,18 @@
 12. 코스 선택이 실제 학습 큐와 유닛 진행도에 반영되도록 연결했다.
 13. 객관식 / 카드식 / 짝맞추기 기반의 데스크탑 학습 흐름을 추가했다.
 14. 일본어 유치원 코스를 히라가나 / 가타카나 스타터로 나누고 코스 맵을 추가했다.
+15. 홈 화면과 학습 화면을 분리하고 모든 학습 설명을 한국어 중심으로 정리했다.
+16. 단어 학습, 단어 퀴즈, 문장 학습을 분리한 흐름으로 정리했다.
+17. 로컬 LLM provider 설정을 추가하고 단어 예문을 새로 생성할 수 있게 했다.
+18. 기기 TTS로 단어/문장 발음을 바로 들을 수 있게 했다.
+19. 현재 머신의 DB와 Ollama를 다른 기기에서도 쓰도록 `crates/linguaforge-api` HTTP 서버를 추가했다.
+20. 프론트엔드 API 레이어를 로컬 Tauri invoke 와 원격 HTTP 호출을 모두 지원하도록 바꿨다.
+21. Android 프로젝트를 초기화하고 디버그 APK/AAB 빌드까지 확인했다.
 
 ## 다음 우선순위
 
-1. 문장형 / 받아쓰기 / 듣기형 문제로 학습 모드 확장
-2. AI enrichment queue 와 quality feedback loop 설계
-3. progress sync 정책과 모바일 흐름 정리
+1. 원격 연결 상태 확인 버튼과 실패 원인 안내 추가
+2. API 인증/토큰과 LAN 외부 노출 가이드 정리
+3. 문장형 / 받아쓰기 / 듣기형 문제로 학습 모드 확장
+4. AI enrichment queue 와 quality feedback loop 설계
+5. progress sync 정책과 모바일 흐름 정리

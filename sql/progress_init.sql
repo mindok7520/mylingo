@@ -92,3 +92,29 @@ CREATE TABLE IF NOT EXISTS app_settings (
     setting_value       TEXT NOT NULL,
     PRIMARY KEY (profile_id, setting_key)
 ) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS lexeme_ko_cache (
+    profile_id          INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    lexeme_id           INTEGER NOT NULL,
+    meaning_ko          TEXT NOT NULL,
+    explanation_ko      TEXT,
+    provider_label      TEXT NOT NULL,
+    updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (profile_id, lexeme_id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_lexeme_ko_cache_updated ON lexeme_ko_cache(updated_at);
+
+CREATE TABLE IF NOT EXISTS ai_generated_lexeme_feedback (
+    profile_id          INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    lexeme_id           INTEGER NOT NULL,
+    profile_key         TEXT,
+    theme_key           TEXT,
+    rating              TEXT NOT NULL,
+    note                TEXT,
+    updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (profile_id, lexeme_id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_ai_generated_feedback_lookup
+    ON ai_generated_lexeme_feedback(profile_key, theme_key, rating, updated_at);

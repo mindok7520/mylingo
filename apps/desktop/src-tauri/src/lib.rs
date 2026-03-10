@@ -1,15 +1,19 @@
+use anyhow::Context;
 use chrono::{Duration, Utc};
+use reqwest::{blocking::Client, Url};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration as StdDuration;
+use unicode_normalization::UnicodeNormalization;
 
 const DEFAULT_PROFILE_KEY: &str = "default";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SearchLexeme {
+pub struct SearchLexeme {
     id: i64,
     language: String,
     display_form: String,
@@ -24,7 +28,7 @@ struct SearchLexeme {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LexemeSense {
+pub struct LexemeSense {
     sense_order: i64,
     gloss_en: Option<String>,
     gloss_ko: Option<String>,
@@ -33,7 +37,7 @@ struct LexemeSense {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LexemeExample {
+pub struct LexemeExample {
     id: i64,
     sentence: String,
     sentence_reading: Option<String>,
@@ -43,7 +47,7 @@ struct LexemeExample {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LexemeKanji {
+pub struct LexemeKanji {
     character: String,
     grade: Option<i64>,
     jlpt_level: Option<i64>,
@@ -55,7 +59,7 @@ struct LexemeKanji {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LexemeDetail {
+pub struct LexemeDetail {
     id: i64,
     language: String,
     lemma: String,
@@ -66,6 +70,9 @@ struct LexemeDetail {
     jlpt_level: Option<i64>,
     cefr_level: Option<String>,
     quality_score: f64,
+    generated_meaning_ko: Option<String>,
+    generated_explanation_ko: Option<String>,
+    generated_provider_label: Option<String>,
     senses: Vec<LexemeSense>,
     examples: Vec<LexemeExample>,
     kanji: Vec<LexemeKanji>,
@@ -74,7 +81,7 @@ struct LexemeDetail {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ActiveSession {
+pub struct ActiveSession {
     id: i64,
     mode: String,
     started_at: String,
@@ -83,7 +90,7 @@ struct ActiveSession {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DashboardSnapshot {
+pub struct DashboardSnapshot {
     profile_key: String,
     due_reviews: i64,
     new_items: i64,
@@ -97,7 +104,7 @@ struct DashboardSnapshot {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StudyStartOption {
+pub struct StudyStartOption {
     course_key: String,
     language: String,
     name: String,
@@ -111,7 +118,7 @@ struct StudyStartOption {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CourseMap {
+pub struct CourseMap {
     course_key: String,
     name: String,
     description: Option<String>,
@@ -122,7 +129,7 @@ struct CourseMap {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CourseMapUnit {
+pub struct CourseMapUnit {
     unit_order: i64,
     title: String,
     total_items: i64,
@@ -133,9 +140,133 @@ struct CourseMapUnit {
     is_locked: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmProviderSettings {
+    enabled: bool,
+    provider: String,
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ReviewQueueItem {
+pub struct GeneratedSentenceLesson {
+    sentence: String,
+    translation_ko: String,
+    explanation_ko: String,
+    usage_tip_ko: String,
+    provider_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KoreanMeaningHint {
+    lexeme_id: i64,
+    meaning_ko: String,
+    explanation_ko: Option<String>,
+    provider_label: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmConnectionStatus {
+    provider_label: String,
+    base_url: String,
+    model_found: bool,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JapaneseBoosterPack {
+    profile_key: String,
+    profile_label: String,
+    theme_key: String,
+    theme_label: String,
+    course_key: String,
+    unit_title: String,
+    inserted_count: usize,
+    attached_existing_count: usize,
+    skipped_count: usize,
+    generated_lexeme_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct JapaneseBoosterProfile {
+    key: &'static str,
+    course_key: &'static str,
+    label: &'static str,
+    description: &'static str,
+    target_domain: &'static str,
+    difficulty_start: i64,
+    difficulty_end: i64,
+    prompt_focus: &'static str,
+    prompt_constraints: &'static str,
+    prompt_examples: &'static str,
+    prompt_avoid: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct JapaneseBoosterTheme {
+    key: &'static str,
+    label: &'static str,
+    prompt_focus: &'static str,
+    prompt_examples: &'static str,
+    prompt_avoid: &'static str,
+    target_item_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JapaneseBoosterRecommendation {
+    profile_key: String,
+    profile_label: String,
+    theme_key: String,
+    theme_label: String,
+    reason: String,
+    current_coverage: i64,
+    target_coverage: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedLexemeFeedbackResult {
+    lexeme_id: i64,
+    rating: String,
+    profile_key: Option<String>,
+    theme_key: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeneratedJapaneseLexemeDraft {
+    surface: String,
+    reading: Option<String>,
+    part_of_speech: String,
+    meaning_ko: String,
+    meaning_en: Option<String>,
+    explanation_ko: Option<String>,
+    sentence: Option<String>,
+    sentence_reading: Option<String>,
+    translation_ko: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PromptLexeme {
+    language: String,
+    display_form: String,
+    reading: Option<String>,
+    gloss_ko: Option<String>,
+    gloss_en: Option<String>,
+    part_of_speech: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewQueueItem {
     review_item_id: i64,
     lexeme_id: i64,
     display_form: String,
@@ -154,7 +285,7 @@ struct ReviewQueueItem {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionState {
+pub struct SessionState {
     session_id: i64,
     mode: String,
     started_at: String,
@@ -192,6 +323,7 @@ struct ReviewStateOutput {
 #[tauri::command]
 fn search_lexemes(query: String, limit: Option<i64>) -> Result<Vec<SearchLexeme>, String> {
     let conn = open_content_db().map_err(|err| err.to_string())?;
+    let progress = open_progress_db().map_err(|err| err.to_string())?;
     let limit = limit.unwrap_or(24).clamp(1, 100);
     let trimmed = query.trim();
 
@@ -203,8 +335,20 @@ fn search_lexemes(query: String, limit: Option<i64>) -> Result<Vec<SearchLexeme>
             l.display_form,
             l.reading,
             pos.display_name,
-            MIN(NULLIF(s.gloss_en, '')),
-            MIN(NULLIF(s.gloss_ko, '')),
+            (
+                SELECT NULLIF(ls.gloss_en, '')
+                FROM lexeme_senses ls
+                WHERE ls.lexeme_id = l.id
+                ORDER BY NULLIF(ls.gloss_ko, '') IS NOT NULL DESC, ls.quality_score DESC, ls.sense_order
+                LIMIT 1
+            ),
+            (
+                SELECT NULLIF(ls.gloss_ko, '')
+                FROM lexeme_senses ls
+                WHERE ls.lexeme_id = l.id
+                ORDER BY NULLIF(ls.gloss_ko, '') IS NOT NULL DESC, ls.quality_score DESC, ls.sense_order
+                LIMIT 1
+            ),
             l.frequency_rank,
             l.jlpt_level,
             l.cefr_level
@@ -224,8 +368,20 @@ fn search_lexemes(query: String, limit: Option<i64>) -> Result<Vec<SearchLexeme>
             l.display_form,
             l.reading,
             pos.display_name,
-            MIN(NULLIF(s.gloss_en, '')),
-            MIN(NULLIF(s.gloss_ko, '')),
+            (
+                SELECT NULLIF(ls.gloss_en, '')
+                FROM lexeme_senses ls
+                WHERE ls.lexeme_id = l.id
+                ORDER BY NULLIF(ls.gloss_ko, '') IS NOT NULL DESC, ls.quality_score DESC, ls.sense_order
+                LIMIT 1
+            ),
+            (
+                SELECT NULLIF(ls.gloss_ko, '')
+                FROM lexeme_senses ls
+                WHERE ls.lexeme_id = l.id
+                ORDER BY NULLIF(ls.gloss_ko, '') IS NOT NULL DESC, ls.quality_score DESC, ls.sense_order
+                LIMIT 1
+            ),
             l.frequency_rank,
             l.jlpt_level,
             l.cefr_level
@@ -266,12 +422,16 @@ fn search_lexemes(query: String, limit: Option<i64>) -> Result<Vec<SearchLexeme>
             .map_err(|err| err.to_string())?
     };
 
+    let mut rows = rows;
+    hydrate_search_results_with_korean_cache(&progress, &mut rows)
+        .map_err(|err| err.to_string())?;
     Ok(rows)
 }
 
 #[tauri::command]
 fn get_lexeme_detail(lexeme_id: i64) -> Result<Option<LexemeDetail>, String> {
     let conn = open_content_db().map_err(|err| err.to_string())?;
+    let progress = open_progress_db().map_err(|err| err.to_string())?;
 
     let base = conn
         .query_row(
@@ -305,6 +465,9 @@ fn get_lexeme_detail(lexeme_id: i64) -> Result<Option<LexemeDetail>, String> {
                     jlpt_level: row.get(7)?,
                     cefr_level: row.get(8)?,
                     quality_score: row.get(9)?,
+                    generated_meaning_ko: None,
+                    generated_explanation_ko: None,
+                    generated_provider_label: None,
                     senses: Vec::new(),
                     examples: Vec::new(),
                     kanji: Vec::new(),
@@ -323,6 +486,7 @@ fn get_lexeme_detail(lexeme_id: i64) -> Result<Option<LexemeDetail>, String> {
     detail.examples = load_examples(&conn, lexeme_id).map_err(|err| err.to_string())?;
     detail.kanji = load_kanji(&conn, lexeme_id).map_err(|err| err.to_string())?;
     detail.tags = load_tags(&conn, lexeme_id).map_err(|err| err.to_string())?;
+    hydrate_detail_with_korean_cache(&progress, &mut detail).map_err(|err| err.to_string())?;
 
     Ok(Some(detail))
 }
@@ -444,6 +608,148 @@ fn get_course_map(course_key: String) -> Result<CourseMap, String> {
         recommended_reason: option.recommended_reason,
         units,
     })
+}
+
+#[tauri::command]
+fn get_llm_settings() -> Result<LlmProviderSettings, String> {
+    let progress = open_progress_db().map_err(|err| err.to_string())?;
+    load_llm_settings(&progress)
+        .map(default_llm_settings)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn save_llm_settings(settings: LlmProviderSettings) -> Result<LlmProviderSettings, String> {
+    let progress = open_progress_db().map_err(|err| err.to_string())?;
+    let profile_id = ensure_default_profile(&progress).map_err(|err| err.to_string())?;
+    let normalized = normalize_llm_settings(settings);
+    progress
+        .execute(
+            "
+            INSERT INTO app_settings (profile_id, setting_key, setting_value)
+            VALUES (?1, 'llm_provider_json', ?2)
+            ON CONFLICT(profile_id, setting_key) DO UPDATE SET setting_value = excluded.setting_value
+            ",
+            params![profile_id, serde_json::to_string(&normalized).map_err(|err| err.to_string())?],
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(normalized)
+}
+
+#[tauri::command]
+fn test_llm_settings(settings: Option<LlmProviderSettings>) -> Result<LlmConnectionStatus, String> {
+    let progress = open_progress_db().map_err(|err| err.to_string())?;
+    let resolved = match settings {
+        Some(value) => normalize_llm_settings(value),
+        None => default_llm_settings(load_llm_settings(&progress).map_err(|err| err.to_string())?),
+    };
+
+    test_llm_connection(&resolved).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn generate_sentence_lesson(
+    lexeme_id: i64,
+    support_lexeme_ids: Option<Vec<i64>>,
+) -> Result<GeneratedSentenceLesson, String> {
+    let content = open_content_db().map_err(|err| err.to_string())?;
+    let progress = open_progress_db().map_err(|err| err.to_string())?;
+    let settings =
+        default_llm_settings(load_llm_settings(&progress).map_err(|err| err.to_string())?);
+    if !settings.enabled {
+        return Err(
+            "현재 저장된 로컬 LLM 설정이 꺼져 있다. 홈에서 LLM 연결 테스트를 다시 실행하거나 설정 저장 후 다시 시도해줘."
+                .to_string(),
+        );
+    }
+
+    let mut focus = load_prompt_lexeme(&content, lexeme_id).map_err(|err| err.to_string())?;
+    hydrate_prompt_lexeme_with_korean_cache(&progress, lexeme_id, &mut focus)
+        .map_err(|err| err.to_string())?;
+    let support_lexeme_ids = support_lexeme_ids.unwrap_or_default();
+    let mut support_words = Vec::new();
+    for support_lexeme_id in support_lexeme_ids.into_iter().take(3) {
+        if support_lexeme_id == lexeme_id {
+            continue;
+        }
+        if let Some(mut word) = load_prompt_lexeme_optional(&content, support_lexeme_id)
+            .map_err(|err| err.to_string())?
+        {
+            hydrate_prompt_lexeme_with_korean_cache(&progress, support_lexeme_id, &mut word)
+                .map_err(|err| err.to_string())?;
+            support_words.push(word);
+        }
+    }
+
+    request_sentence_lesson(&settings, &focus, &support_words).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn ensure_korean_meanings(lexeme_ids: Vec<i64>) -> Result<Vec<KoreanMeaningHint>, String> {
+    let content = open_content_db().map_err(|err| err.to_string())?;
+    let progress = open_progress_db().map_err(|err| err.to_string())?;
+    let settings =
+        default_llm_settings(load_llm_settings(&progress).map_err(|err| err.to_string())?);
+
+    let mut output = Vec::new();
+    for lexeme_id in lexeme_ids.into_iter().take(8) {
+        if let Some(hint) = ensure_korean_meaning_hint(&content, &progress, lexeme_id, &settings)
+            .map_err(|err| err.to_string())?
+        {
+            output.push(hint);
+        }
+    }
+
+    Ok(output)
+}
+
+#[tauri::command]
+fn generate_japanese_booster_pack(
+    profile_key: Option<String>,
+    theme_key: Option<String>,
+    count: Option<i64>,
+) -> Result<JapaneseBoosterPack, String> {
+    let mut content = open_content_db_write().map_err(|err| err.to_string())?;
+    let progress = open_progress_db().map_err(|err| err.to_string())?;
+    let settings =
+        default_llm_settings(load_llm_settings(&progress).map_err(|err| err.to_string())?);
+    let profile = japanese_booster_profile(profile_key.as_deref());
+    let theme = japanese_booster_theme(theme_key.as_deref());
+
+    generate_japanese_booster_pack_inner(
+        &mut content,
+        &progress,
+        &settings,
+        profile,
+        theme,
+        count.unwrap_or(8),
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn recommend_japanese_booster() -> Result<JapaneseBoosterRecommendation, String> {
+    let content = open_content_db().map_err(|err| err.to_string())?;
+    recommend_japanese_booster_inner(&content).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn submit_generated_lexeme_feedback(
+    lexeme_id: i64,
+    profile_key: Option<String>,
+    theme_key: Option<String>,
+    rating: String,
+) -> Result<GeneratedLexemeFeedbackResult, String> {
+    let progress = open_progress_db().map_err(|err| err.to_string())?;
+    save_generated_lexeme_feedback(
+        &progress,
+        lexeme_id,
+        profile_key.as_deref(),
+        theme_key.as_deref(),
+        &rating,
+        None,
+    )
+    .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -607,6 +913,7 @@ fn get_due_reviews(
     {
         let item = hydrate_review_queue_item(
             &content,
+            &progress,
             review_item_id,
             lexeme_id,
             scheduled_at.clone(),
@@ -760,6 +1067,7 @@ fn submit_lexeme_review(
 
     hydrate_review_queue_item(
         &content,
+        &progress,
         review_item_id,
         lexeme_id,
         Some(next.scheduled_at),
@@ -774,6 +1082,100 @@ fn submit_lexeme_review(
     .ok_or_else(|| "review item disappeared after update".to_string())
 }
 
+pub fn search_lexemes_api(query: String, limit: Option<i64>) -> Result<Vec<SearchLexeme>, String> {
+    search_lexemes(query, limit)
+}
+
+pub fn get_lexeme_detail_api(lexeme_id: i64) -> Result<Option<LexemeDetail>, String> {
+    get_lexeme_detail(lexeme_id)
+}
+
+pub fn get_dashboard_snapshot_api() -> Result<DashboardSnapshot, String> {
+    get_dashboard_snapshot()
+}
+
+pub fn get_study_starts_api() -> Result<Vec<StudyStartOption>, String> {
+    get_study_starts()
+}
+
+pub fn get_course_map_api(course_key: String) -> Result<CourseMap, String> {
+    get_course_map(course_key)
+}
+
+pub fn get_llm_settings_api() -> Result<LlmProviderSettings, String> {
+    get_llm_settings()
+}
+
+pub fn save_llm_settings_api(settings: LlmProviderSettings) -> Result<LlmProviderSettings, String> {
+    save_llm_settings(settings)
+}
+
+pub fn test_llm_settings_api(
+    settings: Option<LlmProviderSettings>,
+) -> Result<LlmConnectionStatus, String> {
+    test_llm_settings(settings)
+}
+
+pub fn generate_sentence_lesson_api(
+    lexeme_id: i64,
+    support_lexeme_ids: Option<Vec<i64>>,
+) -> Result<GeneratedSentenceLesson, String> {
+    generate_sentence_lesson(lexeme_id, support_lexeme_ids)
+}
+
+pub fn ensure_korean_meanings_api(lexeme_ids: Vec<i64>) -> Result<Vec<KoreanMeaningHint>, String> {
+    ensure_korean_meanings(lexeme_ids)
+}
+
+pub fn generate_japanese_booster_pack_api(
+    profile_key: Option<String>,
+    theme_key: Option<String>,
+    count: Option<i64>,
+) -> Result<JapaneseBoosterPack, String> {
+    generate_japanese_booster_pack(profile_key, theme_key, count)
+}
+
+pub fn recommend_japanese_booster_api() -> Result<JapaneseBoosterRecommendation, String> {
+    recommend_japanese_booster()
+}
+
+pub fn submit_generated_lexeme_feedback_api(
+    lexeme_id: i64,
+    profile_key: Option<String>,
+    theme_key: Option<String>,
+    rating: String,
+) -> Result<GeneratedLexemeFeedbackResult, String> {
+    submit_generated_lexeme_feedback(lexeme_id, profile_key, theme_key, rating)
+}
+
+pub fn start_study_session_api(
+    mode: Option<String>,
+    course_key: Option<String>,
+) -> Result<SessionState, String> {
+    start_study_session(mode, course_key)
+}
+
+pub fn finish_study_session_api(session_id: i64) -> Result<SessionState, String> {
+    finish_study_session(session_id)
+}
+
+pub fn get_due_reviews_api(
+    course_key: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<ReviewQueueItem>, String> {
+    get_due_reviews(course_key, limit)
+}
+
+pub fn submit_lexeme_review_api(
+    session_id: i64,
+    lexeme_id: i64,
+    grade: String,
+    response_time_ms: Option<i64>,
+) -> Result<ReviewQueueItem, String> {
+    submit_lexeme_review(session_id, lexeme_id, grade, response_time_ms)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -782,6 +1184,14 @@ pub fn run() {
             get_dashboard_snapshot,
             get_study_starts,
             get_course_map,
+            get_llm_settings,
+            save_llm_settings,
+            test_llm_settings,
+            generate_sentence_lesson,
+            ensure_korean_meanings,
+            generate_japanese_booster_pack,
+            recommend_japanese_booster,
+            submit_generated_lexeme_feedback,
             start_study_session,
             finish_study_session,
             get_due_reviews,
@@ -869,6 +1279,1503 @@ fn get_study_start_catalog(content: &Connection) -> anyhow::Result<Vec<StudyStar
     Ok(starts)
 }
 
+fn default_llm_settings(settings: Option<LlmProviderSettings>) -> LlmProviderSettings {
+    normalize_llm_settings(settings.unwrap_or_else(|| LlmProviderSettings {
+        enabled: false,
+        provider: "ollama".to_string(),
+        base_url: "http://127.0.0.1:11434".to_string(),
+        model: "qwen2.5:3b-instruct".to_string(),
+        api_key: None,
+    }))
+}
+
+fn normalize_service_base_url(raw: &str, default_port: u16, default_path: Option<&str>) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    };
+
+    match Url::parse(&with_scheme) {
+        Ok(mut parsed) => {
+            if parsed.port().is_none() {
+                let _ = parsed.set_port(Some(default_port));
+            }
+            if let Some(path) = default_path {
+                if parsed.path().is_empty() || parsed.path() == "/" {
+                    parsed.set_path(path);
+                }
+            } else {
+                parsed.set_path("");
+            }
+            parsed.set_query(None);
+            parsed.set_fragment(None);
+            parsed.to_string().trim_end_matches('/').to_string()
+        }
+        Err(_) => with_scheme.trim_end_matches('/').to_string(),
+    }
+}
+
+fn ollama_base_url_candidates(base_url: &str) -> Vec<String> {
+    let mut values = vec![normalize_service_base_url(base_url, 11434, None)];
+    values.push("http://127.0.0.1:11434".to_string());
+    values.push("http://localhost:11434".to_string());
+    values.retain(|value| !value.is_empty());
+    values.dedup();
+    values
+}
+
+fn normalize_llm_settings(mut settings: LlmProviderSettings) -> LlmProviderSettings {
+    settings.provider = settings.provider.trim().to_ascii_lowercase();
+    if settings.provider.is_empty() {
+        settings.provider = "ollama".to_string();
+    }
+
+    settings.base_url = settings.base_url.trim().trim_end_matches('/').to_string();
+    if settings.base_url.is_empty() {
+        settings.base_url = if settings.provider == "openai-compatible" {
+            "http://127.0.0.1:1234/v1".to_string()
+        } else {
+            "http://127.0.0.1:11434".to_string()
+        };
+    } else {
+        settings.base_url = if settings.provider == "openai-compatible" {
+            normalize_service_base_url(&settings.base_url, 1234, Some("/v1"))
+        } else {
+            normalize_service_base_url(&settings.base_url, 11434, None)
+        };
+    }
+
+    settings.model = settings.model.trim().to_string();
+    if settings.model.is_empty() {
+        settings.model = if settings.provider == "openai-compatible" {
+            "local-model".to_string()
+        } else {
+            "qwen2.5:3b-instruct".to_string()
+        };
+    }
+
+    settings.api_key = settings
+        .api_key
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    settings
+}
+
+fn load_llm_settings(conn: &Connection) -> anyhow::Result<Option<LlmProviderSettings>> {
+    let profile_id = ensure_default_profile(conn)?;
+    let raw = conn
+        .query_row(
+            "
+            SELECT setting_value
+            FROM app_settings
+            WHERE profile_id = ?1 AND setting_key = 'llm_provider_json'
+            ",
+            params![profile_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    raw.map(|value| serde_json::from_str(&value).map(normalize_llm_settings))
+        .transpose()
+        .map_err(Into::into)
+}
+
+fn llm_client() -> anyhow::Result<Client> {
+    Client::builder()
+        .timeout(StdDuration::from_secs(25))
+        .build()
+        .map_err(Into::into)
+}
+
+fn load_cached_korean_meaning(
+    conn: &Connection,
+    lexeme_id: i64,
+) -> anyhow::Result<Option<KoreanMeaningHint>> {
+    let profile_id = ensure_default_profile(conn)?;
+    conn.query_row(
+        "
+        SELECT lexeme_id, meaning_ko, explanation_ko, provider_label
+        FROM lexeme_ko_cache
+        WHERE profile_id = ?1 AND lexeme_id = ?2
+        ",
+        params![profile_id, lexeme_id],
+        |row| {
+            Ok(KoreanMeaningHint {
+                lexeme_id: row.get(0)?,
+                meaning_ko: row.get(1)?,
+                explanation_ko: row.get(2)?,
+                provider_label: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn save_cached_korean_meaning(
+    conn: &Connection,
+    hint: &KoreanMeaningHint,
+) -> anyhow::Result<KoreanMeaningHint> {
+    let profile_id = ensure_default_profile(conn)?;
+    conn.execute(
+        "
+        INSERT INTO lexeme_ko_cache (profile_id, lexeme_id, meaning_ko, explanation_ko, provider_label, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        ON CONFLICT(profile_id, lexeme_id) DO UPDATE SET
+            meaning_ko = excluded.meaning_ko,
+            explanation_ko = excluded.explanation_ko,
+            provider_label = excluded.provider_label,
+            updated_at = excluded.updated_at
+        ",
+        params![
+            profile_id,
+            hint.lexeme_id,
+            hint.meaning_ko.as_str(),
+            hint.explanation_ko.as_deref(),
+            hint.provider_label.as_str(),
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(hint.clone())
+}
+
+fn save_generated_lexeme_feedback(
+    conn: &Connection,
+    lexeme_id: i64,
+    profile_key: Option<&str>,
+    theme_key: Option<&str>,
+    rating: &str,
+    note: Option<&str>,
+) -> anyhow::Result<GeneratedLexemeFeedbackResult> {
+    if !matches!(rating, "good" | "bad") {
+        anyhow::bail!("feedback rating must be 'good' or 'bad'");
+    }
+
+    let profile_id = ensure_default_profile(conn)?;
+    conn.execute(
+        "
+        INSERT INTO ai_generated_lexeme_feedback (
+            profile_id,
+            lexeme_id,
+            profile_key,
+            theme_key,
+            rating,
+            note,
+            updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        ON CONFLICT(profile_id, lexeme_id) DO UPDATE SET
+            profile_key = excluded.profile_key,
+            theme_key = excluded.theme_key,
+            rating = excluded.rating,
+            note = excluded.note,
+            updated_at = excluded.updated_at
+        ",
+        params![
+            profile_id,
+            lexeme_id,
+            profile_key,
+            theme_key,
+            rating,
+            note,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+
+    Ok(GeneratedLexemeFeedbackResult {
+        lexeme_id,
+        rating: rating.to_string(),
+        profile_key: profile_key.map(ToOwned::to_owned),
+        theme_key: theme_key.map(ToOwned::to_owned),
+        message: if rating == "good" {
+            "이 단어를 좋은 AI 생성 예시로 저장했다.".to_string()
+        } else {
+            "이 단어를 아쉬운 AI 생성 예시로 저장했다. 다음 생성에서 피하도록 반영한다.".to_string()
+        },
+    })
+}
+
+fn load_feedback_surfaces(
+    content: &Connection,
+    progress: &Connection,
+    profile_key: Option<&str>,
+    theme_key: Option<&str>,
+    rating: &str,
+) -> anyhow::Result<Vec<String>> {
+    let profile_id = ensure_default_profile(progress)?;
+    let mut stmt = progress.prepare(
+        "
+        SELECT lexeme_id
+        FROM ai_generated_lexeme_feedback
+        WHERE profile_id = ?1
+          AND rating = ?2
+          AND (?3 IS NULL OR profile_key = ?3)
+          AND (?4 IS NULL OR theme_key = ?4)
+        ORDER BY updated_at DESC
+        LIMIT 6
+        ",
+    )?;
+
+    let lexeme_ids = stmt
+        .query_map(params![profile_id, rating, profile_key, theme_key], |row| {
+            row.get::<_, i64>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut surfaces = Vec::new();
+    for lexeme_id in lexeme_ids {
+        if let Some(surface) = content
+            .query_row(
+                "SELECT display_form FROM lexemes WHERE id = ?1",
+                params![lexeme_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            surfaces.push(surface);
+        }
+    }
+    Ok(surfaces)
+}
+
+fn load_feedback_prompt_guidance(
+    content: &Connection,
+    progress: &Connection,
+    profile_key: &str,
+    theme_key: &str,
+) -> anyhow::Result<String> {
+    let liked = load_feedback_surfaces(
+        content,
+        progress,
+        Some(profile_key),
+        Some(theme_key),
+        "good",
+    )?;
+    let disliked =
+        load_feedback_surfaces(content, progress, Some(profile_key), Some(theme_key), "bad")?;
+
+    if liked.is_empty() && disliked.is_empty() {
+        return Ok("이전 생성 피드백 없음".to_string());
+    }
+
+    Ok(format!(
+        "좋은 예시로 저장된 단어: {}\n피해야 할 예시로 저장된 단어: {}",
+        if liked.is_empty() {
+            "없음".to_string()
+        } else {
+            liked.join(", ")
+        },
+        if disliked.is_empty() {
+            "없음".to_string()
+        } else {
+            disliked.join(", ")
+        }
+    ))
+}
+
+fn generated_theme_coverage_count(
+    content: &Connection,
+    course_key: &str,
+    theme_key: &str,
+) -> anyhow::Result<i64> {
+    content
+        .query_row(
+            "
+            SELECT COUNT(ui.item_id)
+            FROM course_templates ct
+            JOIN course_units cu ON cu.course_id = ct.id
+            JOIN unit_items ui ON ui.unit_id = cu.id AND ui.item_type = 'lexeme'
+            WHERE ct.course_key = ?1
+              AND cu.description LIKE ?2
+            ",
+            params![course_key, format!("%[theme:{}]%", theme_key)],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
+fn recommend_japanese_booster_inner(
+    content: &Connection,
+) -> anyhow::Result<JapaneseBoosterRecommendation> {
+    let total_japanese_lexemes: i64 = content.query_row(
+        "
+        SELECT COUNT(*)
+        FROM lexemes l
+        JOIN languages lang ON lang.id = l.language_id
+        WHERE lang.code = 'ja'
+        ",
+        [],
+        |row| row.get(0),
+    )?;
+
+    let profile = if total_japanese_lexemes < 1800 {
+        japanese_booster_profile(Some("kindergarten"))
+    } else if total_japanese_lexemes < 4200 {
+        japanese_booster_profile(Some("jlpt-n5"))
+    } else {
+        japanese_booster_profile(Some("daily-conversation"))
+    };
+
+    let themes = [
+        japanese_booster_theme(Some("family")),
+        japanese_booster_theme(Some("school")),
+        japanese_booster_theme(Some("shopping")),
+        japanese_booster_theme(Some("emotions")),
+    ];
+
+    let (theme, current_coverage) = themes
+        .into_iter()
+        .map(|theme| {
+            let count =
+                generated_theme_coverage_count(content, profile.course_key, theme.key).unwrap_or(0);
+            (theme, count)
+        })
+        .min_by_key(|(theme, count)| count * 100 / theme.target_item_count.max(1))
+        .unwrap_or((japanese_booster_theme(Some("family")), 0));
+
+    Ok(JapaneseBoosterRecommendation {
+        profile_key: profile.key.to_string(),
+        profile_label: profile.label.to_string(),
+        theme_key: theme.key.to_string(),
+        theme_label: theme.label.to_string(),
+        reason: if total_japanese_lexemes < 1800 {
+            format!(
+                "현재 일본어 DB가 아직 얇은 편이라 {} 보강이 먼저 어울린다. {} 주제는 현재 {}/{}개라 가장 비어 있다.",
+                profile.label, theme.label, current_coverage, theme.target_item_count
+            )
+        } else if total_japanese_lexemes < 4200 {
+            format!(
+                "기초 단어는 어느 정도 있지만 JLPT N5 느낌의 빈 구간이 남아 있다. {} 주제를 먼저 메우는 편이 좋다. ({}/{})",
+                theme.label, current_coverage, theme.target_item_count
+            )
+        } else {
+            format!(
+                "기초 DB는 갖춰져 있어서 생활 회화 빈 주제를 메우는 편이 효율적이다. {} 주제 커버리지가 가장 낮다. ({}/{})",
+                theme.label, current_coverage, theme.target_item_count
+            )
+        },
+        current_coverage,
+        target_coverage: theme.target_item_count,
+    })
+}
+
+fn hydrate_search_results_with_korean_cache(
+    progress: &Connection,
+    rows: &mut [SearchLexeme],
+) -> anyhow::Result<()> {
+    for row in rows.iter_mut() {
+        if row.language == "ja"
+            && row
+                .gloss_ko
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+        {
+            if let Some(hint) = load_cached_korean_meaning(progress, row.id)? {
+                row.gloss_ko = Some(hint.meaning_ko);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn hydrate_review_item_with_korean_cache(
+    progress: &Connection,
+    item: &mut ReviewQueueItem,
+) -> anyhow::Result<()> {
+    if item
+        .gloss_ko
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    if let Some(hint) = load_cached_korean_meaning(progress, item.lexeme_id)? {
+        item.gloss_ko = Some(hint.meaning_ko);
+    }
+
+    Ok(())
+}
+
+fn hydrate_detail_with_korean_cache(
+    progress: &Connection,
+    detail: &mut LexemeDetail,
+) -> anyhow::Result<()> {
+    if let Some(hint) = load_cached_korean_meaning(progress, detail.id)? {
+        detail.generated_meaning_ko = Some(hint.meaning_ko.clone());
+        detail.generated_explanation_ko = hint.explanation_ko.clone();
+        detail.generated_provider_label = Some(hint.provider_label.clone());
+
+        if detail.senses.iter().all(|sense| {
+            sense
+                .gloss_ko
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+        }) {
+            if let Some(first) = detail.senses.first_mut() {
+                first.gloss_ko = Some(hint.meaning_ko);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn hydrate_prompt_lexeme_with_korean_cache(
+    progress: &Connection,
+    lexeme_id: i64,
+    lexeme: &mut PromptLexeme,
+) -> anyhow::Result<()> {
+    if lexeme
+        .gloss_ko
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    if let Some(hint) = load_cached_korean_meaning(progress, lexeme_id)? {
+        lexeme.gloss_ko = Some(hint.meaning_ko);
+    }
+
+    Ok(())
+}
+
+fn ensure_korean_meaning_hint(
+    content: &Connection,
+    progress: &Connection,
+    lexeme_id: i64,
+    settings: &LlmProviderSettings,
+) -> anyhow::Result<Option<KoreanMeaningHint>> {
+    if let Some(hint) = load_cached_korean_meaning(progress, lexeme_id)? {
+        return Ok(Some(hint));
+    }
+
+    let Some(prompt_lexeme) = load_prompt_lexeme_optional(content, lexeme_id)? else {
+        return Ok(None);
+    };
+
+    if prompt_lexeme.language != "ja" {
+        return Ok(None);
+    }
+
+    if prompt_lexeme
+        .gloss_ko
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        return Ok(None);
+    }
+
+    if !settings.enabled {
+        return Ok(None);
+    }
+
+    let hint = request_korean_meaning_hint(settings, lexeme_id, &prompt_lexeme)?;
+    save_cached_korean_meaning(progress, &hint).map(Some)
+}
+
+fn request_korean_meaning_hint(
+    settings: &LlmProviderSettings,
+    lexeme_id: i64,
+    focus: &PromptLexeme,
+) -> anyhow::Result<KoreanMeaningHint> {
+    let prompt = format!(
+        "너는 일본어 초급 학습자를 돕는 한국어 사전 코치다. 반드시 JSON 객체 하나만 반환해라. 마크다운, 코드블록, 설명문 없이 JSON만 출력한다.\n\n필드: meaningKo, explanationKo\n규칙:\n1. meaningKo는 가장 대표적인 한국어 뜻 1줄\n2. explanationKo는 초급 학습자용 짧은 한국어 설명 1~2문장\n3. 일본어 단어가 여러 뜻을 가져도 초급자가 먼저 배워야 할 뜻을 우선한다\n4. 영어를 그대로 반복하지 말고 자연스러운 한국어로 바꾼다\n\n단어: {word}\n읽기: {reading}\n품사: {pos}\n영어 뜻 참고: {gloss_en}",
+        word = focus.display_form.as_str(),
+        reading = focus.reading.as_deref().unwrap_or("없음"),
+        pos = focus.part_of_speech.as_str(),
+        gloss_en = focus.gloss_en.as_deref().unwrap_or("없음"),
+    );
+
+    let provider_label = format!("{} / {}", settings.provider, settings.model);
+    let raw = match settings.provider.as_str() {
+        "ollama" => request_llm_json_from_ollama(settings, &prompt)
+            .with_context(|| format!("Ollama 연결 실패: {}", settings.base_url))?,
+        "openai-compatible" => request_llm_json_from_openai(settings, &prompt)
+            .with_context(|| format!("OpenAI 호환 LLM 연결 실패: {}", settings.base_url))?,
+        other => anyhow::bail!("지원하지 않는 provider: {other}"),
+    };
+
+    let value: serde_json::Value = serde_json::from_str(extract_json_object(&raw).unwrap_or(&raw))?;
+    Ok(KoreanMeaningHint {
+        lexeme_id,
+        meaning_ko: pick_string(&value, &["meaningKo", "meaning_ko", "meaning"])
+            .ok_or_else(|| anyhow::anyhow!("meaningKo 필드가 없다"))?,
+        explanation_ko: pick_string(&value, &["explanationKo", "explanation_ko", "explanation"]),
+        provider_label,
+    })
+}
+
+fn request_llm_json_from_ollama(
+    settings: &LlmProviderSettings,
+    prompt: &str,
+) -> anyhow::Result<String> {
+    let candidates = ollama_base_url_candidates(&settings.base_url);
+    let client = llm_client()?;
+    let mut last_error = None;
+
+    for base_url in &candidates {
+        match client
+            .post(format!("{}/api/generate", base_url))
+            .json(&serde_json::json!({
+                "model": settings.model,
+                "prompt": prompt,
+                "stream": false,
+                "format": "json"
+            }))
+            .send()
+        {
+            Ok(response) => {
+                let response = response
+                    .error_for_status()
+                    .with_context(|| format!("Ollama가 {} 모델 요청을 거부했다", settings.model))?;
+                let body: serde_json::Value = response.json()?;
+                return body
+                    .get("response")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| anyhow::anyhow!("ollama 응답에서 response 필드를 찾지 못했다"));
+            }
+            Err(error) => {
+                last_error = Some(format!("{} ({})", base_url, error));
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "현재 머신에서 Ollama에 연결하지 못했다. 저장된 주소: {}. 시도한 주소: {}. 같은 머신의 Ollama면 LLM 주소는 `http://127.0.0.1:11434` 를 쓰는 편이 가장 안전하다. 마지막 오류: {}",
+        settings.base_url,
+        candidates.join(", "),
+        last_error.unwrap_or_else(|| "알 수 없는 오류".to_string())
+    )
+}
+
+fn request_llm_json_from_openai(
+    settings: &LlmProviderSettings,
+    prompt: &str,
+) -> anyhow::Result<String> {
+    let mut request = llm_client()?
+        .post(format!("{}/chat/completions", settings.base_url))
+        .json(&serde_json::json!({
+            "model": settings.model,
+            "messages": [
+                {"role": "system", "content": "한국어 설명만 제공하는 언어 학습 코치다. 사용자가 원하는 JSON 객체만 반환한다."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.4
+        }));
+
+    if let Some(api_key) = &settings.api_key {
+        request = request.bearer_auth(api_key);
+    }
+
+    let body: serde_json::Value = request
+        .send()
+        .with_context(|| format!("현재 머신에서 {} 에 연결하지 못했다", settings.base_url))?
+        .error_for_status()?
+        .json()?;
+
+    body.get("choices")
+        .and_then(|value| value.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("openai-compatible 응답에서 content 필드를 찾지 못했다"))
+}
+
+fn test_llm_connection(settings: &LlmProviderSettings) -> anyhow::Result<LlmConnectionStatus> {
+    let provider_label = format!("{} / {}", settings.provider, settings.model);
+    match settings.provider.as_str() {
+        "ollama" => {
+            let candidates = ollama_base_url_candidates(&settings.base_url);
+            let client = llm_client()?;
+            let mut body = None;
+            let mut connected_base_url = None;
+            let mut last_error = None;
+
+            for base_url in &candidates {
+                match client.get(format!("{}/api/tags", base_url)).send() {
+                    Ok(response) => match response.error_for_status() {
+                        Ok(ok_response) => {
+                            body = Some(ok_response.json::<serde_json::Value>()?);
+                            connected_base_url = Some(base_url.clone());
+                            break;
+                        }
+                        Err(error) => {
+                            last_error = Some(format!("{} ({})", base_url, error));
+                        }
+                    },
+                    Err(error) => {
+                        last_error = Some(format!("{} ({})", base_url, error));
+                    }
+                }
+            }
+
+            let connected_base_url = connected_base_url.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "현재 머신에서 Ollama에 연결하지 못했다. 저장된 주소: {}. 시도한 주소: {}. 같은 머신의 Ollama면 `http://127.0.0.1:11434` 를 써야 한다. 마지막 오류: {}",
+                    settings.base_url,
+                    candidates.join(", "),
+                    last_error.unwrap_or_else(|| "알 수 없는 오류".to_string())
+                )
+            })?;
+
+            let body = body.expect("connected base URL should produce body");
+
+            let model_found = body
+                .get("models")
+                .and_then(|value| value.as_array())
+                .map(|models| {
+                    models.iter().any(|model| {
+                        model
+                            .get("name")
+                            .and_then(|value| value.as_str())
+                            .map(|name| name == settings.model)
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+
+            Ok(LlmConnectionStatus {
+                provider_label,
+                base_url: connected_base_url.clone(),
+                model_found,
+                message: if model_found {
+                    format!(
+                        "{} 에 연결했고 {} 모델도 확인했다. 입력값이 다르더라도 서버에서는 이 주소로 Ollama에 도달했다.",
+                        connected_base_url, settings.model
+                    )
+                } else {
+                    format!(
+                        "{} 에는 연결했지만 {} 모델은 찾지 못했다. `ollama list` 로 모델 이름을 다시 확인해줘.",
+                        connected_base_url, settings.model
+                    )
+                },
+            })
+        }
+        "openai-compatible" => {
+            let body: serde_json::Value = llm_client()?
+                .get(format!("{}/models", settings.base_url))
+                .send()
+                .with_context(|| format!("현재 머신에서 {} 에 연결하지 못했다", settings.base_url))?
+                .error_for_status()?
+                .json()?;
+            let model_found = body
+                .get("data")
+                .and_then(|value| value.as_array())
+                .map(|models| {
+                    models.iter().any(|model| {
+                        model
+                            .get("id")
+                            .and_then(|value| value.as_str())
+                            .map(|id| id == settings.model)
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            Ok(LlmConnectionStatus {
+                provider_label,
+                base_url: settings.base_url.clone(),
+                model_found,
+                message: if model_found {
+                    format!(
+                        "{} 에 연결했고 {} 모델도 확인했다.",
+                        settings.base_url, settings.model
+                    )
+                } else {
+                    format!(
+                        "{} 에는 연결했지만 {} 모델은 목록에서 찾지 못했다.",
+                        settings.base_url, settings.model
+                    )
+                },
+            })
+        }
+        other => anyhow::bail!("지원하지 않는 provider: {other}"),
+    }
+}
+
+fn normalize_japanese_surface(value: &str) -> String {
+    value
+        .nfkc()
+        .collect::<String>()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn normalize_generated_pos_code(value: &str) -> &str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "noun" | "명사" => "noun",
+        "verb-ichidan" | "ichidan" | "1단동사" => "verb-ichidan",
+        "verb-godan" | "godan" | "5단동사" => "verb-godan",
+        "adjective-i" | "i-adjective" | "い형용사" => "adjective-i",
+        "adjective-na" | "na-adjective" | "な형용사" => "adjective-na",
+        "adverb" | "부사" => "adverb",
+        _ => "expression",
+    }
+}
+
+fn japanese_booster_profile(profile_key: Option<&str>) -> JapaneseBoosterProfile {
+    match profile_key.unwrap_or("daily-conversation") {
+        "kindergarten" => JapaneseBoosterProfile {
+            key: "kindergarten",
+            course_key: "ja-ai-kindergarten",
+            label: "일본어 AI 유치원",
+            description: "히라가나와 가장 쉬운 기초 생활 단어만 모은 AI 보강 코스",
+            target_domain: "kindergarten",
+            difficulty_start: 1,
+            difficulty_end: 1,
+            prompt_focus: "아주 어린 초급 학습자가 첫 100단어를 배울 때 필요한 쉬운 단어",
+            prompt_constraints:
+                "가능하면 히라가나 위주, 길이 4글자 안팎, 인사/가족/사물/기초 동작 중심",
+            prompt_examples: "예: おはよう, みず, いぬ, たべる, いく, おおきい",
+            prompt_avoid:
+                "금지 예: 외래어만 있는 카타카나 단어, 사람 이름, 지명, 브랜드명, 긴 문장형 표현",
+        },
+        "jlpt-n5" => JapaneseBoosterProfile {
+            key: "jlpt-n5",
+            course_key: "ja-ai-jlpt-n5",
+            label: "일본어 AI JLPT N5",
+            description: "JLPT N5 감각에 맞춘 기초 단어를 보강하는 AI 코스",
+            target_domain: "jlpt-n5",
+            difficulty_start: 1,
+            difficulty_end: 2,
+            prompt_focus: "JLPT N5 초반에 자주 나오는 핵심 단어와 기초 활용",
+            prompt_constraints: "명사, 기본 동사, 기초 형용사 위주, 시험/교실/일상 주제 허용",
+            prompt_examples: "예: 学校, 先生, 飲む, 行く, 新しい, 時間, 雨",
+            prompt_avoid:
+                "금지 예: N4 이상 문어체 표현, 추상 명사만 있는 단어, 드문 한자어, 고유명사",
+        },
+        _ => JapaneseBoosterProfile {
+            key: "daily-conversation",
+            course_key: "ja-ai-daily-conversation",
+            label: "일본어 AI 생활 회화",
+            description: "하루 대화에서 자주 쓰는 일본어 단어를 보강하는 AI 코스",
+            target_domain: "daily-conversation",
+            difficulty_start: 1,
+            difficulty_end: 2,
+            prompt_focus: "집, 학교, 가게, 이동, 감정 표현에서 자주 쓰는 생활 회화 단어",
+            prompt_constraints:
+                "회화에서 바로 쓰기 쉬운 단어 우선, 지나치게 문어체이거나 드문 단어 금지",
+            prompt_examples: "예: こんにちは, ありがとう, まつ, つかう, 近い, すぐ, ほんとう",
+            prompt_avoid:
+                "금지 예: 전문용어, 고유명사, 브랜드명, 외래어 남발, 지나치게 딱딱한 서면어",
+        },
+    }
+}
+
+fn japanese_booster_theme(theme_key: Option<&str>) -> JapaneseBoosterTheme {
+    match theme_key.unwrap_or("family") {
+        "school" => JapaneseBoosterTheme {
+            key: "school",
+            label: "학교",
+            prompt_focus: "학교, 수업, 숙제, 시간표, 선생님, 친구와 관련된 단어",
+            prompt_examples: "예: せんせい, きょうしつ, つくえ, ノート, やすみ, べんきょう",
+            prompt_avoid: "금지 예: 대학 전공용 전문어, 너무 어려운 행정용어, 고유명사",
+            target_item_count: 24,
+        },
+        "shopping" => JapaneseBoosterTheme {
+            key: "shopping",
+            label: "쇼핑",
+            prompt_focus: "가게, 물건, 계산, 가격, 주문, 음식 구매와 관련된 단어",
+            prompt_examples: "예: みせ, やすい, たかい, かう, りんご, おかね",
+            prompt_avoid: "금지 예: 브랜드명, 전문 상품명, 드문 외래어",
+            target_item_count: 24,
+        },
+        "emotions" => JapaneseBoosterTheme {
+            key: "emotions",
+            label: "감정",
+            prompt_focus: "좋다, 싫다, 기쁘다, 피곤하다 같은 기본 감정과 상태 표현 단어",
+            prompt_examples: "예: うれしい, かなしい, こわい, すき, きらい, つかれる",
+            prompt_avoid: "금지 예: 추상 심리학 용어, 지나치게 문학적인 감정 표현",
+            target_item_count: 20,
+        },
+        _ => JapaneseBoosterTheme {
+            key: "family",
+            label: "가족/집",
+            prompt_focus: "가족, 집, 몸, 식사, 아침 준비처럼 매일 집에서 쓰는 단어",
+            prompt_examples: "예: おかあさん, いえ, みず, ごはん, ねる, あさ",
+            prompt_avoid: "금지 예: 친척 호칭을 과하게 세분화한 드문 단어, 옛말, 이름",
+            target_item_count: 24,
+        },
+    }
+}
+
+fn is_valid_generated_surface(surface: &str) -> bool {
+    let normalized = normalize_japanese_surface(surface);
+    let length = normalized.chars().count();
+    length >= 1
+        && length <= 8
+        && normalized
+            .chars()
+            .any(|ch| matches!(ch as u32, 0x3040..=0x30ff | 0x4e00..=0x9faf))
+}
+
+fn is_valid_generated_reading(reading: &str) -> bool {
+    let trimmed = reading.trim();
+    !trimmed.is_empty()
+        && trimmed.chars().all(|ch| {
+            matches!(ch as u32, 0x3040..=0x309f | 0x30a0..=0x30ff) || ch == ' ' || ch == 'ー'
+        })
+}
+
+fn contains_ascii_wording(value: &str) -> bool {
+    value.chars().filter(|ch| ch.is_ascii_alphabetic()).count() >= 4
+}
+
+fn is_hiragana_text(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| matches!(ch as u32, 0x3040..=0x309f) || ch == ' ' || ch == 'ー')
+}
+
+fn is_valid_generated_japanese_draft(
+    profile: JapaneseBoosterProfile,
+    draft: &GeneratedJapaneseLexemeDraft,
+) -> bool {
+    let sentence_ok = draft
+        .sentence
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|sentence| sentence.contains(draft.surface.trim()) && sentence.chars().count() <= 24)
+        .unwrap_or(false);
+
+    let translation_ok = draft
+        .translation_ko
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+
+    let korean_text_ok = !contains_ascii_wording(&draft.meaning_ko)
+        && !contains_ascii_wording(draft.explanation_ko.as_deref().unwrap_or(""))
+        && !contains_ascii_wording(draft.translation_ko.as_deref().unwrap_or(""));
+
+    let profile_specific_ok = match profile.key {
+        "kindergarten" => {
+            normalize_japanese_surface(&draft.surface).chars().count() <= 4
+                && is_hiragana_text(draft.reading.as_deref().unwrap_or(""))
+                && draft
+                    .sentence
+                    .as_deref()
+                    .map(|sentence| sentence.chars().count() <= 14)
+                    .unwrap_or(false)
+        }
+        "jlpt-n5" => normalize_japanese_surface(&draft.surface).chars().count() <= 6,
+        _ => true,
+    };
+
+    is_valid_generated_surface(&draft.surface)
+        && draft
+            .reading
+            .as_deref()
+            .map(is_valid_generated_reading)
+            .unwrap_or(false)
+        && !draft.meaning_ko.trim().is_empty()
+        && !draft
+            .explanation_ko
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && sentence_ok
+        && translation_ok
+        && korean_text_ok
+        && profile_specific_ok
+}
+
+fn lookup_required_id(
+    conn: &Connection,
+    table: &str,
+    code_column: &str,
+    code: &str,
+) -> anyhow::Result<i64> {
+    conn.query_row(
+        &format!("SELECT id FROM {table} WHERE {code_column} = ?1"),
+        params![code],
+        |row| row.get(0),
+    )
+    .with_context(|| format!("{} 에서 {}={} 값을 찾지 못했다", table, code_column, code))
+}
+
+fn ensure_generated_course(
+    conn: &Connection,
+    language_id: i64,
+    profile: JapaneseBoosterProfile,
+) -> anyhow::Result<i64> {
+    conn.execute(
+        "
+        INSERT INTO course_templates (
+            language_id,
+            course_key,
+            name,
+            description,
+            category,
+            target_exam,
+            target_domain,
+            difficulty_start,
+            difficulty_end,
+            auto_generated
+        ) VALUES (?1, ?2, ?3, ?4, 'ai-generated', NULL, ?5, ?6, ?7, 1)
+        ON CONFLICT(course_key) DO UPDATE SET
+            name = excluded.name,
+            description = excluded.description,
+            category = excluded.category,
+            target_domain = excluded.target_domain,
+            difficulty_start = excluded.difficulty_start,
+            difficulty_end = excluded.difficulty_end,
+            auto_generated = excluded.auto_generated
+        ",
+        params![
+            language_id,
+            profile.course_key,
+            profile.label,
+            profile.description,
+            profile.target_domain,
+            profile.difficulty_start,
+            profile.difficulty_end,
+        ],
+    )?;
+
+    conn.query_row(
+        "SELECT id FROM course_templates WHERE course_key = ?1",
+        params![profile.course_key],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+fn create_generated_unit(
+    conn: &Connection,
+    course_id: i64,
+    profile: JapaneseBoosterProfile,
+    theme: JapaneseBoosterTheme,
+) -> anyhow::Result<(i64, String)> {
+    let next_order: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(unit_order), 0) + 1 FROM course_units WHERE course_id = ?1",
+        params![course_id],
+        |row| row.get(0),
+    )?;
+    let title = format!("{} · {} {next_order}", profile.label, theme.label);
+    conn.execute(
+        "
+        INSERT INTO course_units (course_id, unit_order, title, description)
+        VALUES (?1, ?2, ?3, ?4)
+        ",
+        params![
+            course_id,
+            next_order,
+            title,
+            format!("{} [theme:{}]", profile.description, theme.key),
+        ],
+    )?;
+    Ok((conn.last_insert_rowid(), title))
+}
+
+fn attach_lexeme_to_unit(
+    conn: &Connection,
+    unit_id: i64,
+    lexeme_id: i64,
+    item_order: i64,
+) -> anyhow::Result<bool> {
+    let inserted = conn.execute(
+        "
+        INSERT OR IGNORE INTO unit_items (unit_id, item_type, item_id, item_order)
+        VALUES (?1, 'lexeme', ?2, ?3)
+        ",
+        params![unit_id, lexeme_id, item_order],
+    )?;
+    Ok(inserted > 0)
+}
+
+fn find_existing_lexeme_id(
+    conn: &Connection,
+    language_id: i64,
+    normalized_surface: &str,
+) -> anyhow::Result<Option<i64>> {
+    conn.query_row(
+        "
+        SELECT id
+        FROM lexemes
+        WHERE language_id = ?1 AND lemma_normalized = ?2
+        ORDER BY quality_score DESC, id
+        LIMIT 1
+        ",
+        params![language_id, normalized_surface],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn ensure_example_translation_ko(
+    conn: &Connection,
+    example_id: i64,
+    ko_language_id: Option<i64>,
+    translation_ko: Option<&str>,
+) -> anyhow::Result<()> {
+    if let (Some(language_id), Some(text)) = (
+        ko_language_id,
+        translation_ko
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    ) {
+        conn.execute(
+            "
+            INSERT OR IGNORE INTO example_translations (example_id, language_id, translation_text, is_primary)
+            VALUES (?1, ?2, ?3, 1)
+            ",
+            params![example_id, language_id, text],
+        )?;
+    }
+    Ok(())
+}
+
+fn insert_generated_lexeme(
+    conn: &Connection,
+    language_id: i64,
+    ko_language_id: Option<i64>,
+    pos_id: i64,
+    draft: &GeneratedJapaneseLexemeDraft,
+) -> anyhow::Result<i64> {
+    let normalized_surface = normalize_japanese_surface(&draft.surface);
+    conn.execute(
+        "
+        INSERT INTO lexemes (
+            language_id,
+            lemma,
+            lemma_normalized,
+            display_form,
+            reading,
+            pronunciation,
+            primary_pos_id,
+            quality_score,
+            is_ai_enriched,
+            is_verified,
+            updated_at
+        ) VALUES (?1, ?2, ?3, ?2, ?4, ?4, ?5, 0.42, 1, 0, ?6)
+        ",
+        params![
+            language_id,
+            draft.surface.trim(),
+            normalized_surface,
+            draft.reading.as_deref().map(str::trim),
+            pos_id,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    let lexeme_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "
+        INSERT INTO lexeme_senses (lexeme_id, sense_order, gloss_ko, gloss_en, gloss_detail, quality_score)
+        VALUES (?1, 1, ?2, ?3, ?4, 0.55)
+        ",
+        params![
+            lexeme_id,
+            draft.meaning_ko.trim(),
+            draft.meaning_en.as_deref().map(str::trim),
+            draft.explanation_ko.as_deref().map(str::trim),
+        ],
+    )?;
+
+    conn.execute(
+        "
+        INSERT INTO lexeme_search (lexeme_id, surface, reading, gloss_ko, gloss_en)
+        VALUES (?1, ?2, COALESCE(?3, ''), ?4, COALESCE(?5, ''))
+        ",
+        params![
+            lexeme_id,
+            draft.surface.trim(),
+            draft.reading.as_deref().map(str::trim),
+            draft.meaning_ko.trim(),
+            draft.meaning_en.as_deref().map(str::trim),
+        ],
+    )?;
+
+    if let Some(sentence) = draft
+        .sentence
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let normalized_sentence = sentence.nfkc().collect::<String>();
+        let example_id = conn
+            .query_row(
+                "SELECT id FROM examples WHERE sentence_normalized = ?1",
+                params![normalized_sentence],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let example_id = if let Some(id) = example_id {
+            id
+        } else {
+            conn.execute(
+                "
+                INSERT INTO examples (language_id, sentence, sentence_normalized, sentence_reading, difficulty_level, quality_score)
+                VALUES (?1, ?2, ?3, ?4, 1, 0.45)
+                ",
+                params![language_id, sentence, normalized_sentence, draft.sentence_reading.as_deref().map(str::trim)],
+            )?;
+            conn.last_insert_rowid()
+        };
+
+        ensure_example_translation_ko(
+            conn,
+            example_id,
+            ko_language_id,
+            draft.translation_ko.as_deref(),
+        )?;
+        conn.execute(
+            "
+            INSERT OR IGNORE INTO lexeme_examples (lexeme_id, example_id, match_score)
+            VALUES (?1, ?2, 0.65)
+            ",
+            params![lexeme_id, example_id],
+        )?;
+    }
+
+    Ok(lexeme_id)
+}
+
+fn parse_generated_japanese_drafts(raw: &str) -> anyhow::Result<Vec<GeneratedJapaneseLexemeDraft>> {
+    let json_text = extract_json_object(raw).unwrap_or(raw).trim();
+    let value: serde_json::Value = serde_json::from_str(json_text)?;
+    let entries = if let Some(array) = value.as_array() {
+        array.clone()
+    } else {
+        value
+            .get("words")
+            .and_then(|entry| entry.as_array())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("words 배열이 없다"))?
+    };
+
+    entries
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn request_japanese_booster_drafts(
+    settings: &LlmProviderSettings,
+    profile: JapaneseBoosterProfile,
+    theme: JapaneseBoosterTheme,
+    feedback_guidance: &str,
+    count: i64,
+) -> anyhow::Result<Vec<GeneratedJapaneseLexemeDraft>> {
+    let prompt = format!(
+        "너는 모바일 일본어 학습앱의 단어 코스를 편집하는 전문 교사다. 반드시 JSON 객체 하나만 반환해라. 코드블록, 마크다운, 설명문 없이 JSON만 출력한다.\n\n형식: {{\"words\":[...]}}\nwords 각 항목 필드: surface, reading, partOfSpeech, meaningKo, meaningEn, explanationKo, sentence, sentenceReading, translationKo\n\n이번 코스 성격: {focus}\n세부 제약: {constraints}\n세부 주제: {theme_focus}\n주제 예시: {theme_examples}\n권장 단어 예시: {examples}\n반드시 피할 것: {avoid}\n주제에서 피할 것: {theme_avoid}\n이전 사용자 피드백: {feedback_guidance}\n\n규칙:\n1. 총 {count}개\n2. 서로 중복 금지\n3. 모두 초급 학습자가 오늘 바로 써먹을 수 있는 단어\n4. partOfSpeech 는 noun, verb-ichidan, verb-godan, adjective-i, adjective-na, adverb, expression 중 하나만 사용\n5. surface 는 1~8글자, 일본어 문자만 사용\n6. reading 은 반드시 일본어 읽기로 채우고 비우지 말 것\n7. meaningKo 는 짧고 자연스러운 한국어 대표 뜻 1개\n8. explanationKo 는 초급 학습자가 헷갈리지 않게 설명하는 한국어 1~2문장\n9. sentence 는 surface 가 실제로 들어간 아주 짧은 일본어 예문\n10. sentenceReading 과 translationKo 도 반드시 채울 것\n11. 외래어, 고유명사, 너무 문어체인 단어, 희귀어 금지\n12. 영어 알파벳 섞인 설명문 금지\n13. JSON 외 텍스트 금지"
+        ,
+        focus = profile.prompt_focus,
+        constraints = profile.prompt_constraints,
+        theme_focus = theme.prompt_focus,
+        theme_examples = theme.prompt_examples,
+        examples = profile.prompt_examples,
+        avoid = profile.prompt_avoid,
+        theme_avoid = theme.prompt_avoid,
+        feedback_guidance = feedback_guidance,
+    );
+
+    let raw = match settings.provider.as_str() {
+        "ollama" => request_llm_json_from_ollama(settings, &prompt)?,
+        "openai-compatible" => request_llm_json_from_openai(settings, &prompt)?,
+        other => anyhow::bail!("지원하지 않는 provider: {other}"),
+    };
+
+    parse_generated_japanese_drafts(&raw)
+}
+
+fn generate_japanese_booster_pack_inner(
+    content: &mut Connection,
+    progress: &Connection,
+    settings: &LlmProviderSettings,
+    profile: JapaneseBoosterProfile,
+    theme: JapaneseBoosterTheme,
+    count: i64,
+) -> anyhow::Result<JapaneseBoosterPack> {
+    if !settings.enabled {
+        anyhow::bail!("로컬 LLM이 꺼져 있다. 설정 페이지에서 먼저 켜줘.");
+    }
+
+    let count = count.clamp(4, 12);
+    let feedback_guidance =
+        load_feedback_prompt_guidance(content, progress, profile.key, theme.key)?;
+    let drafts =
+        request_japanese_booster_drafts(settings, profile, theme, &feedback_guidance, count * 2)?;
+    let provider_label = format!("{} / {}", settings.provider, settings.model);
+    let language_id = lookup_required_id(content, "languages", "code", "ja")?;
+    let ko_language_id = content
+        .query_row("SELECT id FROM languages WHERE code = 'ko'", [], |row| {
+            row.get(0)
+        })
+        .optional()?;
+
+    let tx = content.transaction()?;
+    let course_id = ensure_generated_course(&tx, language_id, profile)?;
+    let (unit_id, unit_title) = create_generated_unit(&tx, course_id, profile, theme)?;
+
+    let mut inserted_count = 0usize;
+    let mut attached_existing_count = 0usize;
+    let mut skipped_count = 0usize;
+    let mut item_order = 1i64;
+    let mut generated_lexeme_ids = Vec::new();
+    let mut seen = HashSet::new();
+
+    for draft in drafts {
+        if inserted_count + attached_existing_count >= count as usize {
+            break;
+        }
+
+        let surface = normalize_japanese_surface(&draft.surface);
+        if !is_valid_generated_japanese_draft(profile, &draft)
+            || surface.is_empty()
+            || !seen.insert(surface.clone())
+        {
+            skipped_count += 1;
+            continue;
+        }
+
+        let pos_code = normalize_generated_pos_code(&draft.part_of_speech);
+        let pos_id = lookup_required_id(&tx, "pos_tags", "code", pos_code)?;
+
+        let lexeme_id =
+            if let Some(existing_id) = find_existing_lexeme_id(&tx, language_id, &surface)? {
+                let attached = attach_lexeme_to_unit(&tx, unit_id, existing_id, item_order)?;
+                if attached {
+                    attached_existing_count += 1;
+                    item_order += 1;
+                } else {
+                    skipped_count += 1;
+                    continue;
+                }
+                existing_id
+            } else {
+                let created_id =
+                    insert_generated_lexeme(&tx, language_id, ko_language_id, pos_id, &draft)?;
+                attach_lexeme_to_unit(&tx, unit_id, created_id, item_order)?;
+                inserted_count += 1;
+                item_order += 1;
+                created_id
+            };
+
+        save_cached_korean_meaning(
+            progress,
+            &KoreanMeaningHint {
+                lexeme_id,
+                meaning_ko: draft.meaning_ko.trim().to_string(),
+                explanation_ko: draft
+                    .explanation_ko
+                    .as_deref()
+                    .map(str::trim)
+                    .map(ToOwned::to_owned),
+                provider_label: provider_label.clone(),
+            },
+        )?;
+        generated_lexeme_ids.push(lexeme_id);
+    }
+
+    tx.commit()?;
+
+    Ok(JapaneseBoosterPack {
+        profile_key: profile.key.to_string(),
+        profile_label: profile.label.to_string(),
+        theme_key: theme.key.to_string(),
+        theme_label: theme.label.to_string(),
+        course_key: profile.course_key.to_string(),
+        unit_title,
+        inserted_count,
+        attached_existing_count,
+        skipped_count,
+        generated_lexeme_ids,
+    })
+}
+
+fn load_prompt_lexeme(conn: &Connection, lexeme_id: i64) -> anyhow::Result<PromptLexeme> {
+    load_prompt_lexeme_optional(conn, lexeme_id)?
+        .ok_or_else(|| anyhow::anyhow!("lexeme not found: {lexeme_id}"))
+}
+
+fn load_prompt_lexeme_optional(
+    conn: &Connection,
+    lexeme_id: i64,
+) -> anyhow::Result<Option<PromptLexeme>> {
+    Ok(conn
+        .query_row(
+            "
+            SELECT
+                lang.code,
+                l.display_form,
+                l.reading,
+                pos.display_name,
+                (
+                    SELECT NULLIF(ls.gloss_ko, '')
+                    FROM lexeme_senses ls
+                    WHERE ls.lexeme_id = l.id
+                    ORDER BY NULLIF(ls.gloss_ko, '') IS NOT NULL DESC, ls.quality_score DESC, ls.sense_order
+                    LIMIT 1
+                ),
+                (
+                    SELECT NULLIF(ls.gloss_en, '')
+                    FROM lexeme_senses ls
+                    WHERE ls.lexeme_id = l.id
+                    ORDER BY NULLIF(ls.gloss_ko, '') IS NOT NULL DESC, ls.quality_score DESC, ls.sense_order
+                    LIMIT 1
+                )
+            FROM lexemes l
+            JOIN languages lang ON lang.id = l.language_id
+            JOIN pos_tags pos ON pos.id = l.primary_pos_id
+            LEFT JOIN lexeme_senses s ON s.lexeme_id = l.id
+            WHERE l.id = ?1
+            GROUP BY l.id
+            ",
+            params![lexeme_id],
+            |row| {
+                Ok(PromptLexeme {
+                    language: row.get(0)?,
+                    display_form: row.get(1)?,
+                    reading: row.get(2)?,
+                    part_of_speech: row.get(3)?,
+                    gloss_ko: row.get(4)?,
+                    gloss_en: row.get(5)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+fn request_sentence_lesson(
+    settings: &LlmProviderSettings,
+    focus: &PromptLexeme,
+    support_words: &[PromptLexeme],
+) -> anyhow::Result<GeneratedSentenceLesson> {
+    let support_text = if support_words.is_empty() {
+        "없음".to_string()
+    } else {
+        support_words
+            .iter()
+            .map(|word| {
+                format!(
+                    "{} ({})",
+                    word.display_form.as_str(),
+                    word.gloss_ko
+                        .as_deref()
+                        .or_else(|| word.gloss_en.as_deref())
+                        .unwrap_or("뜻 정보 없음")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let prompt = format!(
+        "너는 한국어 설명만 제공하는 언어 학습 코치다.\n목표 언어: {language}\n집중 단어: {word}\n읽기: {reading}\n품사: {pos}\n한국어 뜻: {gloss_ko}\n영어 뜻 참고: {gloss_en}\n같이 써도 되는 이미 배운 단어: {support_text}\n\n반드시 JSON 객체 하나만 반환해라. 마크다운, 설명문, 코드블록 없이 JSON만 출력한다.\n필드: sentence, translationKo, explanationKo, usageTipKo\n규칙:\n1. sentence는 목표 언어 문장 1개\n2. translationKo는 자연스러운 한국어 해석\n3. explanationKo는 초급 학습자용 한국어 설명\n4. usageTipKo는 짧은 한국어 학습 팁\n5. sentence에는 집중 단어가 반드시 포함되어야 한다\n6. 가능하면 이미 배운 단어를 1~2개 자연스럽게 섞는다\n7. 너무 어렵거나 긴 문장은 피한다",
+        language = match focus.language.as_str() {
+            "ja" => "일본어",
+            "en" => "영어",
+            _ => &focus.language,
+        },
+        word = focus.display_form.as_str(),
+        reading = focus.reading.as_deref().unwrap_or("없음"),
+        pos = focus.part_of_speech.as_str(),
+        gloss_ko = focus.gloss_ko.as_deref().unwrap_or("없음"),
+        gloss_en = focus.gloss_en.as_deref().unwrap_or("없음"),
+    );
+
+    let provider_label = format!("{} / {}", settings.provider, settings.model);
+    match settings.provider.as_str() {
+        "ollama" => request_sentence_lesson_from_ollama(settings, &prompt, provider_label),
+        "openai-compatible" => {
+            request_sentence_lesson_from_openai(settings, &prompt, provider_label)
+        }
+        other => anyhow::bail!("지원하지 않는 provider: {other}"),
+    }
+}
+
+fn request_sentence_lesson_from_ollama(
+    settings: &LlmProviderSettings,
+    prompt: &str,
+    provider_label: String,
+) -> anyhow::Result<GeneratedSentenceLesson> {
+    let text = request_llm_json_from_ollama(settings, prompt)?;
+    parse_generated_sentence_lesson(&text, provider_label)
+}
+
+fn request_sentence_lesson_from_openai(
+    settings: &LlmProviderSettings,
+    prompt: &str,
+    provider_label: String,
+) -> anyhow::Result<GeneratedSentenceLesson> {
+    let text = request_llm_json_from_openai(settings, prompt)?;
+    parse_generated_sentence_lesson(&text, provider_label)
+}
+
+fn parse_generated_sentence_lesson(
+    raw: &str,
+    provider_label: String,
+) -> anyhow::Result<GeneratedSentenceLesson> {
+    let json_text = extract_json_object(raw).unwrap_or(raw).trim();
+    let value: serde_json::Value = serde_json::from_str(json_text)?;
+
+    Ok(GeneratedSentenceLesson {
+        sentence: pick_string(&value, &["sentence"])
+            .ok_or_else(|| anyhow::anyhow!("sentence 필드가 없다"))?,
+        translation_ko: pick_string(&value, &["translationKo", "translation_ko", "translation"])
+            .ok_or_else(|| anyhow::anyhow!("translationKo 필드가 없다"))?,
+        explanation_ko: pick_string(&value, &["explanationKo", "explanation_ko", "explanation"])
+            .ok_or_else(|| anyhow::anyhow!("explanationKo 필드가 없다"))?,
+        usage_tip_ko: pick_string(&value, &["usageTipKo", "usage_tip_ko", "tip"]).unwrap_or_else(
+            || {
+                "문장을 소리 내어 읽고 핵심 단어가 문장에서 어떻게 쓰이는지 같이 확인해보자."
+                    .to_string()
+            },
+        ),
+        provider_label,
+    })
+}
+
+fn pick_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(|entry| entry.as_str())
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn extract_json_object(raw: &str) -> Option<&str> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    raw.get(start..=end)
+}
+
 fn load_virtual_study_starts(content: &Connection) -> anyhow::Result<Vec<StudyStartOption>> {
     let mut starts = Vec::new();
 
@@ -940,6 +2847,9 @@ fn study_start_priority(course_key: &str) -> i32 {
         "ja-kindergarten-hiragana" => 0,
         "ja-kindergarten-katakana" => 1,
         "en-kindergarten" => 2,
+        "ja-ai-kindergarten" => 3,
+        "ja-ai-jlpt-n5" => 4,
+        "ja-ai-daily-conversation" => 5,
         "ja-jlpt-N5" => 10,
         "en-core-a1-a2" => 11,
         "ja-jlpt-N4" => 12,
@@ -1025,6 +2935,7 @@ fn load_course_queue(
 
         let item = hydrate_review_queue_item(
             content,
+            progress,
             review_item_id,
             seed.lexeme_id,
             scheduled_at,
@@ -1318,6 +3229,7 @@ fn load_virtual_course_queue_seeds(
 
 fn hydrate_review_queue_item(
     content: &Connection,
+    progress: &Connection,
     review_item_id: i64,
     lexeme_id: i64,
     scheduled_at: Option<String>,
@@ -1336,8 +3248,20 @@ fn hydrate_review_queue_item(
                 l.display_form,
                 l.reading,
                 pos.display_name,
-                MIN(NULLIF(s.gloss_en, '')),
-                MIN(NULLIF(s.gloss_ko, ''))
+                (
+                    SELECT NULLIF(ls.gloss_en, '')
+                    FROM lexeme_senses ls
+                    WHERE ls.lexeme_id = l.id
+                    ORDER BY NULLIF(ls.gloss_ko, '') IS NOT NULL DESC, ls.quality_score DESC, ls.sense_order
+                    LIMIT 1
+                ),
+                (
+                    SELECT NULLIF(ls.gloss_ko, '')
+                    FROM lexeme_senses ls
+                    WHERE ls.lexeme_id = l.id
+                    ORDER BY NULLIF(ls.gloss_ko, '') IS NOT NULL DESC, ls.quality_score DESC, ls.sense_order
+                    LIMIT 1
+                )
             FROM lexemes l
             JOIN pos_tags pos ON pos.id = l.primary_pos_id
             LEFT JOIN lexeme_senses s ON s.lexeme_id = l.id
@@ -1364,7 +3288,12 @@ fn hydrate_review_queue_item(
                 })
             },
         )
-        .optional()?)
+        .optional()?
+        .map(|mut item| -> anyhow::Result<ReviewQueueItem> {
+            hydrate_review_item_with_korean_cache(progress, &mut item)?;
+            Ok(item)
+        })
+        .transpose()?)
 }
 
 fn virtual_unit_title(course_key: &str, unit_order: i64) -> String {
@@ -1529,6 +3458,29 @@ fn open_content_db() -> anyhow::Result<Connection> {
         PRAGMA cache_size = -16000;
         ",
     )?;
+    Ok(conn)
+}
+
+fn open_content_db_write() -> anyhow::Result<Connection> {
+    let path = if let Ok(path) = std::env::var("LINGUAFORGE_CONTENT_DB") {
+        PathBuf::from(path)
+    } else {
+        workspace_root()?.join("db/content.db")
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let conn = Connection::open(path)?;
+    conn.execute_batch(
+        "
+        PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA temp_store = MEMORY;
+        PRAGMA cache_size = -16000;
+        ",
+    )?;
+    conn.execute_batch(include_str!("../../../../sql/content_init.sql"))?;
     Ok(conn)
 }
 
@@ -1838,6 +3790,9 @@ fn course_level_label(
     ) {
         ("ja-kindergarten-hiragana", _) => "히라가나 입문".to_string(),
         ("ja-kindergarten-katakana", _) => "가타카나 입문".to_string(),
+        ("ja-ai-kindergarten", _) => "AI 유치원".to_string(),
+        ("ja-ai-jlpt-n5", _) => "AI JLPT N5".to_string(),
+        ("ja-ai-daily-conversation", _) => "AI 생활 회화".to_string(),
         ("en-kindergarten", _) => "완전 처음".to_string(),
         (key, _) if key.contains("n5") => "일본어 첫 단계".to_string(),
         (key, _) if key.contains("n4") => "일본어 기초 확장".to_string(),
@@ -1864,6 +3819,15 @@ fn course_recommendation(
     }
     if course_key == "ja-jlpt-N5" {
         return "히라가나 이후 가장 자연스럽게 시작할 수 있는 일본어 코스".to_string();
+    }
+    if course_key == "ja-ai-kindergarten" {
+        return "DB가 비었을 때 히라가나 중심의 쉬운 단어를 빠르게 보강하는 AI 코스".to_string();
+    }
+    if course_key == "ja-ai-jlpt-n5" {
+        return "JLPT N5 감각에 맞춰 기초 단어를 메꾸고 싶을 때 좋은 AI 코스".to_string();
+    }
+    if course_key == "ja-ai-daily-conversation" {
+        return "생활 회화에서 바로 쓰는 단어를 더 채우고 싶을 때 좋은 AI 코스".to_string();
     }
     if course_key == "ja-jlpt-N4" {
         return "기초 어휘를 안다면 바로 표현 폭을 넓히기 좋은 단계".to_string();
