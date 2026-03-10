@@ -563,15 +563,8 @@ function App() {
     setHomeSection(section);
   }
 
-  function openStudySection(mode: LessonMode) {
+  function openStudySection() {
     setPage("study");
-    setLessonMode(mode);
-    setStudyPanel("flash");
-  }
-
-  function openStudyPanel(panel: StudyPanel) {
-    setPage("study");
-    setStudyPanel(panel);
   }
 
   function focusDeckCard(lexemeId: number | null) {
@@ -627,7 +620,7 @@ function App() {
     try {
       await startStudySession("review");
       await refreshAll();
-      openStudySection("word");
+      openStudySection();
       const queue = dueReviews.latest ?? [];
       if (queue.length > 0) {
         setStudyStatus(null);
@@ -654,7 +647,7 @@ function App() {
     rememberRecentCourse(option.courseKey);
     try {
       await startStudySession(`course:${option.courseKey}`, option.courseKey);
-      openStudySection("word");
+      openStudySection();
       const [queue] = await Promise.all([getDueReviews(option.courseKey, 8), refreshAll(), getCourseMap(option.courseKey)]);
       await refetchDueReviews();
       if (queue[0]) {
@@ -1030,7 +1023,7 @@ function App() {
         </div>
 
         <div class="hero-actions">
-          <button class="action-button primary" onClick={() => openStudySection("word")}>
+          <button class="action-button primary" onClick={openStudySection}>
             오늘의 학습 시작하기
           </button>
           <button class="action-button" onClick={() => openHomeSection("courses")}>
@@ -1100,7 +1093,7 @@ function App() {
         </div>
 
         <div class="hero-actions">
-          <button class="action-button primary" onClick={() => openStudySection("word")}>
+          <button class="action-button primary" onClick={openStudySection}>
             지금 학습 시작
           </button>
           <Show when={homePreviewCard()}>
@@ -1195,7 +1188,7 @@ function App() {
                 ? "생성 중..."
                 : `${boosterProfiles.find((profile) => profile.key === boosterProfile())?.label ?? "일본어"} AI 보강`}
             </button>
-            <button class="action-button" onClick={() => openStudySection("word")}>
+            <button class="action-button" onClick={openStudySection}>
               진행 중 학습으로 이동
             </button>
           </div>
@@ -1646,43 +1639,15 @@ function App() {
         </Show>
       </section>
 
-      <section class="section-switcher panel">
-        <button class={`mode-tab ${studyPanel() === "flash" ? "active" : ""}`} onClick={() => openStudyPanel("flash")}>
-          카드
-        </button>
-        <button class={`mode-tab ${studyPanel() === "review" ? "active" : ""}`} onClick={() => openStudyPanel("review")}>
-          복습 덱
-        </button>
-        <button class={`mode-tab ${studyPanel() === "detail" ? "active" : ""}`} onClick={() => openStudyPanel("detail")}>
-          단어 설명
-        </button>
-        <button class={`mode-tab ${studyPanel() === "progress" ? "active" : ""}`} onClick={() => openStudyPanel("progress")}>
-          코스 진도
-        </button>
-      </section>
-
       <section class="study-grid study-focus-grid">
         <div class="page-stack">
-          <Show when={studyPanel() === "flash"}>
       <section class="panel">
             <div class="panel-head compact">
               <div>
-                <p class="panel-kicker">학습 모드</p>
-                <h2>한 번에 한 가지에 집중</h2>
+                <p class="panel-kicker">단어 학습</p>
+                <h2>소리를 듣고 뜻을 생각해보세요</h2>
               </div>
-              <span class="status-pill">카드 {currentCardPosition()}/{currentDeckCount()}</span>
-            </div>
-
-            <div class="mode-tabs">
-              <button class={`mode-tab ${lessonMode() === "word" ? "active" : ""}`} onClick={() => openStudySection("word")}>
-                단어 학습
-              </button>
-              <button class={`mode-tab ${lessonMode() === "quiz" ? "active" : ""}`} onClick={() => openStudySection("quiz")}>
-                단어 퀴즈
-              </button>
-              <button class={`mode-tab ${lessonMode() === "sentence" ? "active" : ""}`} onClick={() => openStudySection("sentence")}>
-                문장 학습
-              </button>
+              <span class="status-pill">진행도 {currentCardPosition()}/{currentDeckCount()}</span>
             </div>
 
             <Show
@@ -1727,378 +1692,126 @@ function App() {
                     </button>
                   </div>
 
-                  <div class="inline-actions wrap-actions">
-                    <button class="action-button" disabled={currentDeckCount() <= 1} onClick={() => moveDeckCard(-1)}>
-                      이전 카드
-                    </button>
-                    <button class="action-button" disabled={currentDeckCount() <= 1} onClick={() => moveDeckCard(1)}>
-                      다음 카드
-                    </button>
-                    <button class="action-button" disabled={currentDeckCount() <= 1} onClick={jumpRandomDeckCard}>
-                      랜덤
-                    </button>
-                    <button class="action-button" onClick={() => openStudyPanel("review")}>
-                      덱 보기
-                    </button>
-                  </div>
+                  <div>
+                    <Show
+                      when={revealed()}
+                      fallback={
+                        <button class="action-button primary full" onClick={() => setRevealed(true)} style={{ "margin-top": "2rem", "font-size": "1.2rem", "padding": "1.2rem" }}>
+                          정답 확인하기
+                        </button>
+                      }
+                    >
+                      <div class="lesson-answer">
+                        <p>{itemMeaning(item())}</p>
+                      </div>
 
-                  <Show when={lessonMode() === "word"}>
-                    <div>
-                      <Show
-                        when={revealed()}
-                        fallback={
-                          <button class="action-button primary full" onClick={() => setRevealed(true)}>
-                            뜻 보기
-                          </button>
-                        }
-                      >
-                        <div class="lesson-answer">
-                          <p>{itemMeaning(item())}</p>
-                        </div>
-
-                        <div class="review-actions wide">
-                          <For each={["again", "hard", "good", "easy"] as const}>
-                            {(grade) => (
-                              <button
-                                class={`review-button ${grade === "again" ? "again" : ""} ${grade === "good" ? "good" : ""} ${grade === "easy" ? "easy" : ""}`}
-                                disabled={busyGrade() !== null}
-                                onClick={() => handleReview(item(), grade)}
-                              >
-                                {gradeLabel(grade)}
+                      <Show when={generatedSentence()}>
+                        {(lesson) => (
+                          <article class="sentence-card" style={{ "margin-top": "1rem", "background-color": "var(--duo-blue-light)", "border": "2px solid var(--duo-blue)", "box-shadow": "none" }}>
+                            <div class="sentence-head">
+                              <strong>예문 학습</strong>
+                              <button class="tts-button" style={{ "background": "white" }} onClick={() => void handleSpeak(lesson().sentence, detail.latest?.language ?? activeCourse()?.language ?? "ja")}>
+                                예문 듣기
                               </button>
-                            )}
-                          </For>
+                            </div>
+                            <p class="sentence-text" style={{ "color": "var(--duo-blue-dark)" }}>{lesson().sentence}</p>
+                            <p style={{ "font-weight": "700" }}>{lesson().translationKo}</p>
+                            <Show when={lesson().usageTipKo}>
+                              <p class="support-copy" style={{ "font-size": "0.9rem", "margin-top": "0.5rem" }}>💡 {lesson().usageTipKo}</p>
+                            </Show>
+                          </article>
+                        )}
+                      </Show>
+
+                      <Show when={!generatedSentence() && existingSentenceExample()}>
+                        {(example) => (
+                          <article class="sentence-card" style={{ "margin-top": "1rem", "background-color": "var(--duo-gray)", "border": "2px solid var(--duo-gray-dark)", "box-shadow": "none" }}>
+                            <div class="sentence-head">
+                              <strong>기본 예문</strong>
+                              <button class="tts-button" style={{ "background": "white" }} onClick={() => void handleSpeak(example().sentence, detail.latest?.language ?? activeCourse()?.language ?? "ja")}>
+                                예문 듣기
+                              </button>
+                            </div>
+                            <p class="sentence-text">{example().sentence}</p>
+                            <Show when={example().sentenceReading}>
+                              <p class="sentence-reading">{example().sentenceReading}</p>
+                            </Show>
+                          </article>
+                        )}
+                      </Show>
+
+                      <Show when={!generatedSentence() && !existingSentenceExample()}>
+                        <div style={{ "margin-top": "1rem", "text-align": "center" }}>
+                          <button class="action-button" disabled={generatingSentence()} onClick={() => void handleGenerateSentence()}>
+                            {generatingSentence() ? "AI 문장 생성 중..." : "AI 예문 만들기 🪄"}
+                          </button>
                         </div>
                       </Show>
-                    </div>
-                  </Show>
 
-                  <Show when={lessonMode() === "quiz"}>
-                    <div class="quiz-block">
-                      <p class="quiz-prompt">이 단어의 뜻으로 가장 자연스러운 한국어 해석을 골라줘.</p>
-                      <div class="quiz-options">
-                        <For each={quizOptions()}>
-                          {(option) => (
+                      <Show when={sentenceError()}>
+                        <p class="support-copy" style={{ "margin-top": "0.5rem", "text-align": "center" }}>예문을 불러오지 못했습니다.</p>
+                      </Show>
+
+                      <div class="detail-section" style={{ "margin-top": "2rem", "padding-top": "1rem", "border-top": "2px dashed var(--duo-gray)", "display": "grid", "gap": "1rem" }}>
+                        <Show when={inferBoosterProfileFromCourseKey(activeCourseKey())}>
+                           <div class="inline-actions wrap-actions" style={{ "justify-content": "center" }}>
+                             <For each={["good", "too_easy", "too_hard", "inaccurate"] as const}>
+                               {(rating) => (
+                                 <button
+                                   class="action-button"
+                                   disabled={submittingFeedback() !== null}
+                                   onClick={() => void handleGeneratedFeedback(rating)}
+                                 >
+                                   {submittingFeedback() === rating ? "저장 중..." : feedbackRatingLabel(rating)}
+                                 </button>
+                               )}
+                             </For>
+                           </div>
+                        </Show>
+                        <Show when={feedbackStatus()}>
+                          <p class="feedback-text" style={{ "text-align": "center" }}>{feedbackStatus()}</p>
+                        </Show>
+
+                        <Show when={detail.latest?.kanji && detail.latest.kanji.length > 0}>
+                            <div>
+                              <strong style={{ "color": "var(--duo-gray-dark)", "font-size": "0.9rem" }}>관련 한자</strong>
+                              <div class="kanji-grid" style={{ "margin-top": "0.5rem" }}>
+                                <For each={detail.latest?.kanji.slice(0, 4) ?? []}>
+                                  {(kanji) => (
+                                    <article class="kanji-card" style={{ "border": "2px solid var(--duo-gray)", "box-shadow": "none", "border-radius": "12px", "padding": "0.8rem" }}>
+                                      <div class="kanji-top">
+                                        <strong>{kanji.character}</strong>
+                                        <span>JLPT {kanji.jlptLevel ?? "-"}</span>
+                                      </div>
+                                      <p style={{ "font-size": "0.85rem", "color": "var(--duo-text-light)" }}>{kanji.meanings.join(", ") || "뜻 정보 없음"}</p>
+                                    </article>
+                                  )}
+                                </For>
+                              </div>
+                            </div>
+                        </Show>
+                      </div>
+
+                      <div class="review-actions wide" style={{ "margin-top": "1.5rem", "display": "grid", "grid-template-columns": "1fr 1fr", "gap": "1rem" }}>
+                        <For each={["again", "good"] as const}>
+                          {(grade) => (
                             <button
-                              class="quiz-option"
+                              class={`review-button ${grade === "again" ? "again" : "good"}`}
+                              style={{ "padding": "1.2rem", "font-size": "1.2rem", "width": "100%" }}
                               disabled={busyGrade() !== null}
-                              onClick={() => handleQuizAnswer(option.lexemeId)}
+                              onClick={() => handleReview(item(), grade)}
                             >
-                              {itemMeaning(option)}
+                              {gradeLabel(grade)}
                             </button>
                           )}
                         </For>
                       </div>
-                      <Show when={quizFeedback()}>
-                        <p class="feedback-text">{quizFeedback()}</p>
-                      </Show>
-                    </div>
-                  </Show>
-
-                  <Show when={lessonMode() === "sentence"}>
-                    <div class="sentence-block">
-                      <div class="sentence-section">
-                        <div class="panel-head compact slim-head">
-                          <div>
-                            <p class="panel-kicker">문장 학습</p>
-                            <h2>배운 단어로 문장 이해하기</h2>
-                          </div>
-                          <button class="action-button primary" disabled={generatingSentence()} onClick={handleGenerateSentence}>
-                            {generatingSentence() ? "예문 생성 중..." : "로컬 LLM 예문 생성"}
-                          </button>
-                        </div>
-
-                        <Show when={existingSentenceExample()}>
-                          {(example) => (
-                            <article class="sentence-card muted-card">
-                              <div class="sentence-head">
-                                <strong>사전 예문</strong>
-                                <button class="tts-button" onClick={() => void handleSpeak(example().sentence, detail.latest?.language ?? activeCourse()?.language ?? "ja")}>
-                                  문장 듣기
-                                </button>
-                              </div>
-                              <p class="sentence-text">{example().sentence}</p>
-                              <Show when={example().sentenceReading}>
-                                <p class="sentence-reading">{example().sentenceReading}</p>
-                              </Show>
-                              <p class="support-copy">한국어 학습 포인트: {itemMeaning(item())}</p>
-                            </article>
-                          )}
-                        </Show>
-
-                        <Show when={generatedSentence()}>
-                          {(lesson) => (
-                            <article class="sentence-card">
-                              <div class="sentence-head">
-                                <strong>로컬 LLM 새 예문</strong>
-                                <button class="tts-button" onClick={() => void handleSpeak(lesson().sentence, detail.latest?.language ?? activeCourse()?.language ?? "ja")}>
-                                  문장 듣기
-                                </button>
-                              </div>
-                              <p class="sentence-text">{lesson().sentence}</p>
-                              <p>{lesson().translationKo}</p>
-                              <p class="support-copy">설명: {lesson().explanationKo}</p>
-                              <p class="support-copy">팁: {lesson().usageTipKo}</p>
-                              <p class="support-copy">생성 모델: {lesson().providerLabel}</p>
-                            </article>
-                          )}
-                        </Show>
-
-                        <Show when={sentenceError()}>
-                          <div class="empty-state error">{sentenceError()}</div>
-                        </Show>
-                      </div>
-                    </div>
-                  </Show>
-                </div>
-              )}
-            </Show>
-          </section>
-          </Show>
-
-          <Show when={studyPanel() === "review" && lessonMode() === "quiz"}>
-          <section class="panel">
-            <div class="panel-head compact">
-              <div>
-                <p class="panel-kicker">단어 퀴즈</p>
-                <h2>짝맞추기 연습</h2>
-              </div>
-            </div>
-
-            <Show
-              when={matchingItems().length >= 2}
-              fallback={<div class="empty-state">같은 유닛 카드가 2장 이상일 때 짝맞추기 연습이 열린다.</div>}
-            >
-              <div class="matching-grid">
-                <div class="match-column">
-                  <For each={matchingItems()}>
-                    {(item) => (
-                      <button
-                        class={`match-chip ${selectedWordId() === item.lexemeId ? "selected" : ""}`}
-                        disabled={matchingBusy()}
-                        onClick={() => handleWordPick(item.lexemeId)}
-                      >
-                        <strong>{item.displayForm}</strong>
-                        <Show when={item.reading}>
-                          <span>{item.reading}</span>
-                        </Show>
-                      </button>
-                    )}
-                  </For>
-                </div>
-
-                <div class="match-column">
-                  <For each={matchingMeanings()}>
-                    {(item) => (
-                      <button
-                        class={`match-chip meaning ${selectedMeaningId() === item.lexemeId ? "selected" : ""}`}
-                        disabled={matchingBusy()}
-                        onClick={() => handleMeaningPick(item.lexemeId)}
-                      >
-                        {itemMeaning(item)}
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </div>
-            </Show>
-
-            <Show when={matchingFeedback()}>
-              <p class="feedback-text">{matchingFeedback()}</p>
-            </Show>
-          </section>
-          </Show>
-        </div>
-
-        <div class="page-stack">
-          <Show when={studyPanel() === "progress" && lessonMode() !== "sentence"}>
-          <section class="panel">
-            <div class="panel-head compact">
-              <div>
-                <p class="panel-kicker">코스 진행도</p>
-                <h2>{courseMap.latest?.name ?? "현재 코스"}</h2>
-              </div>
-            </div>
-
-            <Show when={courseMap.latest} fallback={<div class="empty-state">진행 중인 코스를 시작하면 유닛 맵이 열린다.</div>}>
-              {(map) => (
-                <div class="map-list">
-                  <For each={map().units}>
-                    {(unit) => (
-                      <article class={`map-unit ${unit.isCompleted ? "completed" : ""} ${unit.isCurrent ? "current" : ""} ${unit.isLocked ? "locked" : ""}`}>
-                        <div class="map-unit-top">
-                          <span class="map-dot">{unit.unitOrder}</span>
-                          <div>
-                            <strong>{unit.title}</strong>
-                            <p>
-                              {unit.learnedCount}/{unit.totalItems} 학습 · {unit.reviewedCount}회 복습
-                            </p>
-                          </div>
-                        </div>
-                      </article>
-                    )}
-                  </For>
-                </div>
-              )}
-            </Show>
-          </section>
-          </Show>
-
-          <Show when={studyPanel() === "review" && lessonMode() !== "sentence"}>
-          <section class="panel">
-            <div class="panel-head compact">
-              <div>
-                <p class="panel-kicker">현재 유닛</p>
-                <h2>다음 카드 목록</h2>
-              </div>
-            </div>
-
-            <div class="mode-tabs review-filter-tabs">
-              <For each={[
-                ["all", "전체"],
-                ["new", "새 카드"],
-                ["learning", "학습 중"],
-                ["reviewing", "복습 중"],
-                ["relearning", "어려움"],
-              ] as const}>
-                {([key, label]) => (
-                  <button
-                    class={`mode-tab ${reviewDifficultyFilter() === key ? "active" : ""}`}
-                    onClick={() => setReviewDifficultyFilter(key)}
-                  >
-                    {label}
-                  </button>
-                )}
-              </For>
-            </div>
-            <p class="support-copy">현재 필터에서 {currentDeckCount()}개 카드가 바로 보인다.</p>
-
-            <Show when={filteredDueReviews().length > 0} fallback={<div class="empty-state">이 필터에 맞는 카드가 없다. 다른 난이도 필터를 골라보자.</div>}>
-              <div class="queue-list">
-                <For each={filteredDueReviews()}>
-                  {(item) => (
-                    <article class="queue-card">
-                      <div class="queue-head">
-                        <div>
-                          <button class="queue-link" onClick={() => { setManualCardLexemeId(item.lexemeId); setSelectedId(item.lexemeId); openStudyPanel("flash"); }}>
-                            {item.displayForm}
-                          </button>
-                          <Show when={item.reading}>
-                            <p>{item.reading}</p>
-                          </Show>
-                        </div>
-                        <span class={`badge ${item.isNew ? "accent" : "muted"}`}>{masteryLabel(item.masteryLevel)}</span>
-                      </div>
-                      <p class="queue-gloss">{itemMeaning(item)}</p>
-                      <Show when={secondaryMeaning(item)}>
-                        <p class="support-copy">영문 참고: {secondaryMeaning(item)}</p>
-                      </Show>
-                      <Show when={item.unitTitle}>
-                        <p class="queue-unit">{item.unitTitle}</p>
-                      </Show>
-                    </article>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </section>
-          </Show>
-
-          <Show when={studyPanel() === "detail"}>
-          <section class="panel">
-            <div class="panel-head compact">
-              <div>
-                <p class="panel-kicker">현재 단어 설명</p>
-                <h2>한국어 중심 풀이</h2>
-              </div>
-            </div>
-
-            <Show when={detail.latest} fallback={<div class="empty-state">현재 카드를 고르면 여기에서 뜻과 예문을 볼 수 있다.</div>}>
-              {(item) => (
-                <div class="detail-body compact-detail">
-                  <div class="detail-hero">
-                    <div>
-                      <p class="detail-surface">{item().displayForm}</p>
-                      <Show when={item().reading}>
-                        <p class="detail-reading">{item().reading}</p>
-                      </Show>
-                    </div>
-                    <button class="tts-button" onClick={() => void handleSpeak(item().displayForm, item().language)}>
-                      발음 듣기
-                    </button>
+                    </Show>
                   </div>
-
-                  <section class="detail-section">
-                    <h3>뜻</h3>
-                    <Show when={item().generatedMeaningKo}>
-                      <article class="lesson-answer">
-                        <p>{item().generatedMeaningKo}</p>
-                        <Show when={item().generatedExplanationKo}>
-                          <p class="support-copy">{item().generatedExplanationKo}</p>
-                        </Show>
-                        <Show when={item().generatedProviderLabel}>
-                          <p class="support-copy">뜻 보강: {item().generatedProviderLabel}</p>
-                        </Show>
-                      </article>
-                    </Show>
-                    <Show when={inferBoosterProfileFromCourseKey(activeCourseKey())}>
-                       <div class="inline-actions wrap-actions">
-                         <For each={["good", "too_easy", "too_hard", "inaccurate"] as const}>
-                           {(rating) => (
-                             <button
-                               class="action-button"
-                               disabled={submittingFeedback() !== null}
-                               onClick={() => void handleGeneratedFeedback(rating)}
-                             >
-                               {submittingFeedback() === rating ? "저장 중..." : feedbackRatingLabel(rating)}
-                             </button>
-                           )}
-                         </For>
-                       </div>
-                    </Show>
-                    <Show when={feedbackStatus()}>
-                      <p class="feedback-text">{feedbackStatus()}</p>
-                    </Show>
-                    <div class="sense-list">
-                      <For each={item().senses.slice(0, 4)}>
-                        {(sense) => (
-                          <article class="sense-card">
-                            <span class="sense-order">{sense.senseOrder}</span>
-                            <div>
-                               <p>{senseMeaning(sense)}</p>
-                               <Show when={sense.glossKo && sense.glossEn}>
-                                 <p class="support-copy">영문 참고: {formatGlossText(sense.glossEn)}</p>
-                               </Show>
-                             </div>
-                           </article>
-                        )}
-                      </For>
-                    </div>
-                  </section>
-
-                  <Show when={item().kanji.length > 0}>
-                    <section class="detail-section">
-                      <h3>한자</h3>
-                      <div class="kanji-grid">
-                        <For each={item().kanji.slice(0, 4)}>
-                          {(kanji) => (
-                            <article class="kanji-card">
-                              <div class="kanji-top">
-                                <strong>{kanji.character}</strong>
-                                <span>JLPT {kanji.jlptLevel ?? "-"}</span>
-                              </div>
-                              <p>{kanji.meanings.join(", ") || "뜻 정보 없음"}</p>
-                            </article>
-                          )}
-                        </For>
-                      </div>
-                    </section>
-                  </Show>
                 </div>
               )}
             </Show>
           </section>
-          </Show>
         </div>
       </section>
     </div>
@@ -2116,7 +1829,7 @@ function App() {
           <span style="font-size: 1.5rem; margin-bottom: 2px;">📚</span>
           코스
         </button>
-        <button class={`mobile-nav-button ${page() === "study" ? "active" : ""}`} onClick={() => openStudySection("word")}>
+        <button class={`mobile-nav-button ${page() === "study" ? "active" : ""}`} onClick={openStudySection}>
           <span style="font-size: 1.5rem; margin-bottom: 2px;">🎯</span>
           학습
         </button>

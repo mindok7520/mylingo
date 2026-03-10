@@ -121,3 +121,15 @@ CREATE INDEX IF NOT EXISTS idx_ai_generated_feedback_lookup
 CREATE INDEX IF NOT EXISTS idx_review_events_reviewed_at ON review_events(reviewed_at);
 CREATE INDEX IF NOT EXISTS idx_course_progress_profile ON course_progress(profile_id, course_key);
 CREATE INDEX IF NOT EXISTS idx_unit_progress_profile ON unit_progress(profile_id, course_key);
+
+CREATE TABLE IF NOT EXISTS sentence_lesson_cache (
+    profile_id INTEGER NOT NULL,
+    lexeme_id INTEGER NOT NULL,
+    sentence TEXT NOT NULL,
+    translation_ko TEXT NOT NULL,
+    explanation_ko TEXT NOT NULL,
+    usage_tip_ko TEXT NOT NULL,
+    provider_label TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (profile_id, lexeme_id)
+);

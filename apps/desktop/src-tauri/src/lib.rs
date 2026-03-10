@@ -1467,9 +1467,8 @@ fn load_cached_sentence_lesson(
         "SELECT sentence, translation_ko, explanation_ko, usage_tip_ko, provider_label
          FROM sentence_lesson_cache
          WHERE profile_id = ?1 AND lexeme_id = ?2",
-    ).unwrap_or_else(|_| conn.prepare("SELECT 1 WHERE 0").unwrap()); // fallback if table missing
+    )?;
 
-    // We try to run the query, but if the table doesn't exist yet, we just return None
     let result = stmt.query_row(params![profile_id, lexeme_id], |row| {
         Ok(GeneratedSentenceLesson {
             sentence: row.get(0)?,
@@ -1478,12 +1477,9 @@ fn load_cached_sentence_lesson(
             usage_tip_ko: row.get(3)?,
             provider_label: row.get(4)?,
         })
-    }).optional();
+    }).optional()?;
 
-    match result {
-        Ok(opt) => Ok(opt),
-        Err(_) => Ok(None) // Ignore errors like missing table
-    }
+    Ok(result)
 }
 
 fn save_cached_sentence_lesson(
@@ -1492,22 +1488,6 @@ fn save_cached_sentence_lesson(
     lesson: &GeneratedSentenceLesson,
 ) -> anyhow::Result<()> {
     let profile_id = ensure_default_profile(conn)?;
-
-    // Ensure table exists (simple migration for community-driven optimization)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS sentence_lesson_cache (
-            profile_id INTEGER NOT NULL,
-            lexeme_id INTEGER NOT NULL,
-            sentence TEXT NOT NULL,
-            translation_ko TEXT NOT NULL,
-            explanation_ko TEXT NOT NULL,
-            usage_tip_ko TEXT NOT NULL,
-            provider_label TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (profile_id, lexeme_id)
-        )",
-        [],
-    )?;
 
     conn.execute(
         "
