@@ -286,6 +286,7 @@ function App() {
   const [syncingNow, setSyncingNow] = createSignal(false);
   const [offlinePacking, setOfflinePacking] = createSignal(false);
   const [savingSettings, setSavingSettings] = createSignal(false);
+  const [sessionBusy, setSessionBusy] = createSignal(false);
   const [serverForm, setServerForm] = createSignal<ServerConnectionConfig>(loadServerConnectionConfig());
   const [recentCourseKeys, setRecentCourseKeys] = createSignal<string[]>(loadRecentCourseKeys());
   const [llmForm, setLlmForm] = createSignal<LlmProviderSettings>({
@@ -616,17 +617,34 @@ function App() {
   }
 
   async function handleStartGeneralSession() {
+    if (sessionBusy()) return;
+    setSessionBusy(true);
     setSelectedCourseKey(null);
     setManualCardLexemeId(null);
     setStudyStatus("복습 큐를 새로 불러오는 중이다...");
     setReviewDifficultyFilter("all");
-    await startStudySession("review");
-    openStudySection("word");
-    await refreshAll();
-    refreshSyncStatus();
+
+    try {
+      await startStudySession("review");
+      await refreshAll();
+      openStudySection("word");
+      const queue = dueReviews.latest ?? [];
+      if (queue.length > 0) {
+        setStudyStatus(null);
+      } else {
+        setStudyStatus("현재 바로 복습할 카드가 없다.");
+      }
+      refreshSyncStatus();
+    } catch (e) {
+      setStudyStatus(`오류: ${String(e)}`);
+    } finally {
+      setSessionBusy(false);
+    }
   }
 
   async function handleStartCourse(option: StudyStartOption) {
+    if (sessionBusy()) return;
+    setSessionBusy(true);
     setPreviewCourseKey(option.courseKey);
     setStartingCourseKey(option.courseKey);
     setSelectedCourseKey(option.courseKey);
@@ -646,20 +664,29 @@ function App() {
         setStudyStatus("이 코스에서 아직 바로 낼 카드가 없다. 서버 캐시를 다시 확인해보자.");
       }
       refreshSyncStatus();
+    } catch (e) {
+      setStudyStatus(`오류: ${String(e)}`);
     } finally {
       setStartingCourseKey(null);
+      setSessionBusy(false);
     }
   }
 
   async function handleFinishSession() {
-    const active = dashboard.latest?.activeSession;
-    if (!active) return;
-    await finishStudySession(active.id);
-    await refreshAll();
-    setSelectedCourseKey(null);
-    setManualCardLexemeId(null);
-    openHomeSection("dashboard");
-    refreshSyncStatus();
+    if (sessionBusy()) return;
+    setSessionBusy(true);
+    try {
+      const active = dashboard.latest?.activeSession;
+      if (!active) return;
+      await finishStudySession(active.id);
+      await refreshAll();
+      setSelectedCourseKey(null);
+      setManualCardLexemeId(null);
+      openHomeSection("dashboard");
+      refreshSyncStatus();
+    } finally {
+      setSessionBusy(false);
+    }
   }
 
   async function handleReview(item: ReviewQueueItem, grade: "again" | "hard" | "good" | "easy") {
@@ -996,28 +1023,48 @@ function App() {
       <section class="hero-panel">
         <div>
           <p class="eyebrow">LinguaForge</p>
-          <h1>한국어 중심으로 시작하고, 학습은 별도 페이지에서 편하게 이어지는 로컬 학습 앱</h1>
+          <h1>매일 조금씩 달성하는 목표!</h1>
           <p class="subtitle">
-            메인은 한국어로 안내하고, 학습은 `학습 페이지`에서 단어 학습, 단어 퀴즈, 문장 학습으로 나눠서 진행한다.
-            문장 예문은 로컬 LLM으로 새로 만들 수 있고, 발음은 기기 TTS로 바로 들을 수 있다.
+            꾸준히 학습하여 XP를 모아보세요. 오늘의 목표를 달성할 수 있을까요?
           </p>
         </div>
 
         <div class="hero-actions">
           <button class="action-button primary" onClick={() => openStudySection("word")}>
-            단어 학습 시작
+            오늘의 학습 시작하기
           </button>
           <button class="action-button" onClick={() => openHomeSection("courses")}>
-            코스 선택으로 이동
+            코스 둘러보기
           </button>
         </div>
       </section>
 
+      <section class="panel">
+        <div class="panel-head compact">
+          <div>
+            <p class="panel-kicker">일일 목표</p>
+            <h2>오늘의 XP: {dashboard.latest?.reviewEventsToday ? dashboard.latest.reviewEventsToday * 10 : 0} / 500</h2>
+          </div>
+          <span class="status-pill success">연속 학습 중!</span>
+        </div>
+        <div class="progress-shell" style={{ height: '1.2rem', "background-color": "var(--duo-gray)" }}>
+          <div
+            class="progress-bar"
+            style={{
+              width: `${Math.min(100, (dashboard.latest?.reviewEventsToday || 0) * 10 / 500 * 100)}%`,
+              "background-color": "var(--duo-yellow)",
+              "border-radius": "999px"
+            }}
+          />
+        </div>
+        <p class="support-copy" style={{ "margin-top": "0.5rem" }}>복습과 학습을 완료할 때마다 XP가 오릅니다.</p>
+      </section>
+
       <section class="stats-grid">
-        <article class="stat-card emphasis">
-          <span>진행 중 세션</span>
+        <article class="stat-card emphasis" style={{ "background": "var(--duo-blue-light)", "border-color": "var(--duo-blue)", "color": "var(--duo-blue-dark)" }}>
+          <span style={{ "color": "var(--duo-blue-dark)" }}>진행 중 세션</span>
           <strong>{dashboard.latest?.activeSession ? "있음" : "없음"}</strong>
-          <small>{dashboard.latest?.activeSession?.courseKey ?? "아직 시작 전"}</small>
+          <small style={{ "color": "var(--duo-blue)" }}>{dashboard.latest?.activeSession?.courseKey ?? "아직 시작 전"}</small>
         </article>
         <article class="stat-card">
           <span>현재 복습</span>
@@ -1029,10 +1076,10 @@ function App() {
           <strong>{dashboard.latest?.newItems ?? 0}</strong>
           <small>아직 익히지 않은 항목</small>
         </article>
-        <article class="stat-card">
-          <span>오늘 기록</span>
-          <strong>{dashboard.latest?.reviewEventsToday ?? 0}</strong>
-          <small>오늘 누적 복습</small>
+        <article class="stat-card" style={{ "background": "var(--duo-yellow)", "border-color": "var(--duo-yellow-dark)", "color": "white" }}>
+          <span style={{ "color": "rgba(255,255,255,0.9)" }}>오늘 획득 XP</span>
+          <strong>{dashboard.latest?.reviewEventsToday ? dashboard.latest.reviewEventsToday * 10 : 0} XP</strong>
+          <small style={{ "color": "rgba(255,255,255,0.9)" }}>{dashboard.latest?.reviewEventsToday ?? 0}회 복습 완료</small>
         </article>
       </section>
 
@@ -1579,10 +1626,10 @@ function App() {
         </div>
 
         <div class="hero-actions">
-          <button class="action-button" onClick={handleStartGeneralSession}>
+          <button class="action-button" disabled={sessionBusy()} onClick={handleStartGeneralSession}>
             복습 새로고침
           </button>
-          <button class="action-button primary" disabled={!dashboard.latest?.activeSession} onClick={handleFinishSession}>
+          <button class="action-button primary" disabled={!dashboard.latest?.activeSession || sessionBusy()} onClick={handleFinishSession}>
             세션 종료
           </button>
         </div>
@@ -2062,18 +2109,23 @@ function App() {
       {page() === "home" ? home : study}
       <nav class="mobile-nav">
         <button class={`mobile-nav-button ${page() === "home" && homeSection() === "dashboard" ? "active" : ""}`} onClick={() => openHomeSection("dashboard")}>
+          <span style="font-size: 1.5rem; margin-bottom: 2px;">🏠</span>
           오늘
         </button>
         <button class={`mobile-nav-button ${page() === "home" && homeSection() === "courses" ? "active" : ""}`} onClick={() => openHomeSection("courses")}>
+          <span style="font-size: 1.5rem; margin-bottom: 2px;">📚</span>
           코스
         </button>
         <button class={`mobile-nav-button ${page() === "study" ? "active" : ""}`} onClick={() => openStudySection("word")}>
-          단어
+          <span style="font-size: 1.5rem; margin-bottom: 2px;">🎯</span>
+          학습
         </button>
         <button class={`mobile-nav-button ${page() === "home" && homeSection() === "search" ? "active" : ""}`} onClick={() => openHomeSection("search")}>
+          <span style="font-size: 1.5rem; margin-bottom: 2px;">🔍</span>
           검색
         </button>
         <button class={`mobile-nav-button ${page() === "home" && homeSection() === "settings" ? "active" : ""}`} onClick={() => openHomeSection("settings")}>
+          <span style="font-size: 1.5rem; margin-bottom: 2px;">⚙️</span>
           설정
         </button>
       </nav>
