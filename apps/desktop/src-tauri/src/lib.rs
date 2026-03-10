@@ -654,6 +654,13 @@ fn generate_sentence_lesson(
 ) -> Result<GeneratedSentenceLesson, String> {
     let content = open_content_db().map_err(|err| err.to_string())?;
     let progress = open_progress_db().map_err(|err| err.to_string())?;
+
+    // Check cache first for community-driven fast learning without regenerating
+    let cached_lesson = load_cached_sentence_lesson(&progress, lexeme_id).map_err(|err| err.to_string())?;
+    if let Some(lesson) = cached_lesson {
+        return Ok(lesson);
+    }
+
     let settings =
         default_llm_settings(load_llm_settings(&progress).map_err(|err| err.to_string())?);
     if !settings.enabled {
@@ -681,7 +688,12 @@ fn generate_sentence_lesson(
         }
     }
 
-    request_sentence_lesson(&settings, &focus, &support_words).map_err(|err| err.to_string())
+    let lesson = request_sentence_lesson(&settings, &focus, &support_words).map_err(|err| err.to_string())?;
+
+    // Save to cache for fast future retrieval
+    save_cached_sentence_lesson(&progress, lexeme_id, &lesson).map_err(|err| err.to_string())?;
+
+    Ok(lesson)
 }
 
 #[tauri::command]
@@ -1444,6 +1456,84 @@ fn save_cached_korean_meaning(
         ],
     )?;
     Ok(hint.clone())
+}
+
+fn load_cached_sentence_lesson(
+    conn: &Connection,
+    lexeme_id: i64,
+) -> anyhow::Result<Option<GeneratedSentenceLesson>> {
+    let profile_id = ensure_default_profile(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT sentence, translation_ko, explanation_ko, usage_tip_ko, provider_label
+         FROM sentence_lesson_cache
+         WHERE profile_id = ?1 AND lexeme_id = ?2",
+    ).unwrap_or_else(|_| conn.prepare("SELECT 1 WHERE 0").unwrap()); // fallback if table missing
+
+    // We try to run the query, but if the table doesn't exist yet, we just return None
+    let result = stmt.query_row(params![profile_id, lexeme_id], |row| {
+        Ok(GeneratedSentenceLesson {
+            sentence: row.get(0)?,
+            translation_ko: row.get(1)?,
+            explanation_ko: row.get(2)?,
+            usage_tip_ko: row.get(3)?,
+            provider_label: row.get(4)?,
+        })
+    }).optional();
+
+    match result {
+        Ok(opt) => Ok(opt),
+        Err(_) => Ok(None) // Ignore errors like missing table
+    }
+}
+
+fn save_cached_sentence_lesson(
+    conn: &Connection,
+    lexeme_id: i64,
+    lesson: &GeneratedSentenceLesson,
+) -> anyhow::Result<()> {
+    let profile_id = ensure_default_profile(conn)?;
+
+    // Ensure table exists (simple migration for community-driven optimization)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sentence_lesson_cache (
+            profile_id INTEGER NOT NULL,
+            lexeme_id INTEGER NOT NULL,
+            sentence TEXT NOT NULL,
+            translation_ko TEXT NOT NULL,
+            explanation_ko TEXT NOT NULL,
+            usage_tip_ko TEXT NOT NULL,
+            provider_label TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (profile_id, lexeme_id)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "
+        INSERT INTO sentence_lesson_cache (
+            profile_id, lexeme_id, sentence, translation_ko, explanation_ko, usage_tip_ko, provider_label, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        ON CONFLICT(profile_id, lexeme_id) DO UPDATE SET
+            sentence = excluded.sentence,
+            translation_ko = excluded.translation_ko,
+            explanation_ko = excluded.explanation_ko,
+            usage_tip_ko = excluded.usage_tip_ko,
+            provider_label = excluded.provider_label,
+            updated_at = excluded.updated_at
+        ",
+        params![
+            profile_id,
+            lexeme_id,
+            lesson.sentence,
+            lesson.translation_ko,
+            lesson.explanation_ko,
+            lesson.usage_tip_ko,
+            lesson.provider_label,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(())
 }
 
 fn save_generated_lexeme_feedback(

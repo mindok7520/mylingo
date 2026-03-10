@@ -118,3 +118,6 @@ CREATE TABLE IF NOT EXISTS ai_generated_lexeme_feedback (
 
 CREATE INDEX IF NOT EXISTS idx_ai_generated_feedback_lookup
     ON ai_generated_lexeme_feedback(profile_key, theme_key, rating, updated_at);
+CREATE INDEX IF NOT EXISTS idx_review_events_reviewed_at ON review_events(reviewed_at);
+CREATE INDEX IF NOT EXISTS idx_course_progress_profile ON course_progress(profile_id, course_key);
+CREATE INDEX IF NOT EXISTS idx_unit_progress_profile ON unit_progress(profile_id, course_key);
