@@ -36,8 +36,13 @@ import {
 type Page = "home" | "study";
 type LessonMode = "word" | "quiz" | "sentence";
 type HomeSection = "dashboard" | "courses" | "search" | "settings";
+type StudyPanel = "flash" | "review" | "detail" | "progress";
 type BoosterProfileKey = "kindergarten" | "jlpt-n5" | "daily-conversation";
 type BoosterThemeKey = "family" | "school" | "shopping" | "emotions";
+type ReviewDifficultyFilter = "all" | "new" | "learning" | "reviewing" | "relearning";
+type GeneratedFeedbackRating = "good" | "too_easy" | "too_hard" | "inaccurate";
+
+const RECENT_COURSES_KEY = "linguaforge.recentCourses";
 
 const boosterProfiles: Array<{ key: BoosterProfileKey; label: string; description: string }> = [
   { key: "kindergarten", label: "유치원", description: "히라가나와 가장 쉬운 첫 단어" },
@@ -89,6 +94,21 @@ function aiCourseBadge(courseKey: string) {
   return null;
 }
 
+function reviewFilterLabel(filter: ReviewDifficultyFilter) {
+  if (filter === "new") return "새 카드";
+  if (filter === "learning") return "학습 중";
+  if (filter === "reviewing") return "복습 중";
+  if (filter === "relearning") return "어려움";
+  return "전체";
+}
+
+function feedbackRatingLabel(rating: GeneratedFeedbackRating) {
+  if (rating === "good") return "좋음";
+  if (rating === "too_easy") return "너무 쉬움";
+  if (rating === "too_hard") return "너무 어려움";
+  return "뜻 부정확";
+}
+
 function inferBoosterProfileFromCourseKey(courseKey?: string | null): BoosterProfileKey | null {
   if (courseKey === "ja-ai-kindergarten") return "kindergarten";
   if (courseKey === "ja-ai-jlpt-n5") return "jlpt-n5";
@@ -103,6 +123,23 @@ function inferBoosterThemeFromUnitTitle(title?: string | null): BoosterThemeKey 
   if (title.includes("쇼핑")) return "shopping";
   if (title.includes("감정")) return "emotions";
   return null;
+}
+
+function loadRecentCourseKeys() {
+  if (typeof window === "undefined") return [] as string[];
+  try {
+    const raw = window.localStorage.getItem(RECENT_COURSES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as string[];
+    return Array.isArray(parsed) ? parsed.filter((value) => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentCourseKeys(courseKeys: string[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(RECENT_COURSES_KEY, JSON.stringify(courseKeys.slice(0, 8)));
 }
 
 function formatGlossText(value: string | null | undefined) {
@@ -210,11 +247,14 @@ function App() {
   const [page, setPage] = createSignal<Page>("home");
   const [homeSection, setHomeSection] = createSignal<HomeSection>("dashboard");
   const [lessonMode, setLessonMode] = createSignal<LessonMode>("word");
+  const [studyPanel, setStudyPanel] = createSignal<StudyPanel>("flash");
+  const [reviewDifficultyFilter, setReviewDifficultyFilter] = createSignal<ReviewDifficultyFilter>("all");
   const [query, setQuery] = createSignal("");
   const [selectedId, setSelectedId] = createSignal<number | null>(null);
   const [previewCourseKey, setPreviewCourseKey] = createSignal<string | null>(null);
   const [refreshKey, setRefreshKey] = createSignal(0);
   const [revealed, setRevealed] = createSignal(false);
+  const [manualCardLexemeId, setManualCardLexemeId] = createSignal<number | null>(null);
   const [busyGrade, setBusyGrade] = createSignal<string | null>(null);
   const [startingCourseKey, setStartingCourseKey] = createSignal<string | null>(null);
   const [selectedCourseKey, setSelectedCourseKey] = createSignal<string | null>(null);
@@ -234,17 +274,20 @@ function App() {
   const [testingLlm, setTestingLlm] = createSignal(false);
   const [testingApiServer, setTestingApiServer] = createSignal(false);
   const [generatingJapanesePack, setGeneratingJapanesePack] = createSignal(false);
+  const [generationProgress, setGenerationProgress] = createSignal(0);
+  const [generationMessage, setGenerationMessage] = createSignal<string | null>(null);
   const [boosterProfile, setBoosterProfile] = createSignal<BoosterProfileKey>("daily-conversation");
   const [boosterTheme, setBoosterTheme] = createSignal<BoosterThemeKey>("family");
   const [boosterRecommendation, setBoosterRecommendation] = createSignal<JapaneseBoosterRecommendation | null>(null);
   const [feedbackStatus, setFeedbackStatus] = createSignal<string | null>(null);
-  const [submittingFeedback, setSubmittingFeedback] = createSignal<"good" | "bad" | null>(null);
+  const [submittingFeedback, setSubmittingFeedback] = createSignal<GeneratedFeedbackRating | null>(null);
   const [syncStatus, setSyncStatus] = createSignal<RemoteSyncStatus>(getRemoteSyncStatus());
   const [syncMessage, setSyncMessage] = createSignal<string | null>(null);
   const [syncingNow, setSyncingNow] = createSignal(false);
   const [offlinePacking, setOfflinePacking] = createSignal(false);
   const [savingSettings, setSavingSettings] = createSignal(false);
   const [serverForm, setServerForm] = createSignal<ServerConnectionConfig>(loadServerConnectionConfig());
+  const [recentCourseKeys, setRecentCourseKeys] = createSignal<string[]>(loadRecentCourseKeys());
   const [llmForm, setLlmForm] = createSignal<LlmProviderSettings>({
     enabled: false,
     provider: "ollama",
@@ -272,7 +315,7 @@ function App() {
   }));
 
   const [dueReviews, { refetch: refetchDueReviews }] = createResource(dueReviewSource, (source) =>
-    getDueReviews(source.courseKey, 8),
+    getDueReviews(source.courseKey, 24),
   );
 
   const [detail, { refetch: refetchDetail }] = createResource(selectedId, (value) =>
@@ -282,18 +325,51 @@ function App() {
     courseKey ? getCourseMap(courseKey) : null,
   );
 
-  const currentCard = createMemo(() => dueReviews.latest?.[0] ?? null);
+  const filteredDueReviews = createMemo(() => {
+    const filter = reviewDifficultyFilter();
+    const items = dueReviews.latest ?? [];
+    if (filter === "all") return items;
+    return items.filter((item) => {
+      if (filter === "new") return item.isNew || item.masteryLevel === "new";
+      return item.masteryLevel === filter;
+    });
+  });
+  const currentCard = createMemo(() => {
+    const items = filteredDueReviews();
+    const manual = manualCardLexemeId();
+    if (manual != null) {
+      return items.find((item) => item.lexemeId === manual) ?? items[0] ?? null;
+    }
+    return items[0] ?? null;
+  });
   const activeCourse = createMemo(() =>
     (studyStarts.latest ?? []).find((option) => option.courseKey === activeCourseKey()) ?? null,
   );
   const recommendedStarts = createMemo(() => studyStarts.latest ?? []);
   const existingSentenceExample = createMemo(() => detail.latest?.examples[0] ?? null);
   const homePreviewCard = createMemo(() => dueReviews.latest?.[0] ?? null);
+  const recentCourseOptions = createMemo(() => {
+    const starts = studyStarts.latest ?? [];
+    return recentCourseKeys()
+      .map((courseKey) => starts.find((option) => option.courseKey === courseKey) ?? null)
+      .filter((option): option is StudyStartOption => option != null);
+  });
   const coursePreviewUnits = createMemo(() => {
     const units = courseMap.latest?.units ?? [];
     const currentUnits = units.filter((unit) => unit.isCurrent).slice(0, 2);
     if (currentUnits.length > 0) return currentUnits;
     return units.slice(0, 3);
+  });
+  const currentDeckCount = createMemo(() => filteredDueReviews().length);
+  const currentCardIndex = createMemo(() => {
+    const items = filteredDueReviews();
+    const current = currentCard();
+    if (!current || items.length === 0) return -1;
+    return items.findIndex((item) => item.lexemeId === current.lexemeId);
+  });
+  const currentCardPosition = createMemo(() => {
+    const index = currentCardIndex();
+    return index >= 0 ? index + 1 : 0;
   });
 
   function refreshSyncStatus() {
@@ -343,7 +419,7 @@ function App() {
 
   const quizOptions = createMemo(() => {
     const current = currentCard();
-    const others = (dueReviews.latest ?? []).filter((item) => item.lexemeId !== current?.lexemeId);
+    const others = filteredDueReviews().filter((item) => item.lexemeId !== current?.lexemeId);
     const candidateOptions = [current, ...others].filter(
       (item): item is ReviewQueueItem => Boolean(item && itemMeaning(item) !== "뜻 정보 없음"),
     );
@@ -354,7 +430,7 @@ function App() {
   });
 
   const matchingItems = createMemo(() => {
-    return (dueReviews.latest ?? [])
+    return filteredDueReviews()
       .filter((item) => itemMeaning(item) !== "뜻 정보 없음")
       .slice(0, 4);
   });
@@ -406,6 +482,10 @@ function App() {
 
   createEffect(() => {
     const card = currentCard();
+    const manual = manualCardLexemeId();
+    if (manual != null && !filteredDueReviews().some((item) => item.lexemeId === manual)) {
+      setManualCardLexemeId(null);
+    }
     if (card) {
       setSelectedId(card.lexemeId);
       setStudyStatus(null);
@@ -471,6 +551,12 @@ function App() {
     await refreshBoosterRecommendation();
   }
 
+  function rememberRecentCourse(courseKey: string) {
+    const next = [courseKey, ...recentCourseKeys().filter((value) => value !== courseKey)].slice(0, 8);
+    setRecentCourseKeys(next);
+    saveRecentCourseKeys(next);
+  }
+
   function openHomeSection(section: HomeSection) {
     setPage("home");
     setHomeSection(section);
@@ -479,6 +565,46 @@ function App() {
   function openStudySection(mode: LessonMode) {
     setPage("study");
     setLessonMode(mode);
+    setStudyPanel("flash");
+  }
+
+  function openStudyPanel(panel: StudyPanel) {
+    setPage("study");
+    setStudyPanel(panel);
+  }
+
+  function focusDeckCard(lexemeId: number | null) {
+    setManualCardLexemeId(lexemeId);
+    if (lexemeId != null) {
+      setSelectedId(lexemeId);
+    }
+  }
+
+  function moveDeckCard(step: number) {
+    const items = filteredDueReviews();
+    if (items.length === 0) return;
+    const baseIndex = currentCardIndex() >= 0 ? currentCardIndex() : 0;
+    const nextIndex = (baseIndex + step + items.length) % items.length;
+    focusDeckCard(items[nextIndex]?.lexemeId ?? null);
+  }
+
+  function jumpRandomDeckCard() {
+    const items = filteredDueReviews();
+    if (items.length <= 1) return;
+    const currentId = currentCard()?.lexemeId ?? null;
+    const candidates = items.filter((item) => item.lexemeId !== currentId);
+    const next = candidates[Math.floor(Math.random() * candidates.length)] ?? items[0];
+    focusDeckCard(next.lexemeId);
+  }
+
+  function nextDeckLexemeAfterReview(currentLexemeId: number) {
+    const items = filteredDueReviews();
+    if (items.length <= 1) return null;
+    const currentIndex = items.findIndex((item) => item.lexemeId === currentLexemeId);
+    const remaining = items.filter((item) => item.lexemeId !== currentLexemeId);
+    if (remaining.length === 0) return null;
+    const fallbackIndex = currentIndex >= 0 ? currentIndex % remaining.length : 0;
+    return remaining[fallbackIndex]?.lexemeId ?? remaining[0]?.lexemeId ?? null;
   }
 
   async function ensureSessionId() {
@@ -491,7 +617,9 @@ function App() {
 
   async function handleStartGeneralSession() {
     setSelectedCourseKey(null);
+    setManualCardLexemeId(null);
     setStudyStatus("복습 큐를 새로 불러오는 중이다...");
+    setReviewDifficultyFilter("all");
     await startStudySession("review");
     openStudySection("word");
     await refreshAll();
@@ -502,7 +630,10 @@ function App() {
     setPreviewCourseKey(option.courseKey);
     setStartingCourseKey(option.courseKey);
     setSelectedCourseKey(option.courseKey);
+    setManualCardLexemeId(null);
     setStudyStatus("코스의 첫 단어를 준비하는 중이다...");
+    setReviewDifficultyFilter("all");
+    rememberRecentCourse(option.courseKey);
     try {
       await startStudySession(`course:${option.courseKey}`, option.courseKey);
       openStudySection("word");
@@ -526,17 +657,20 @@ function App() {
     await finishStudySession(active.id);
     await refreshAll();
     setSelectedCourseKey(null);
+    setManualCardLexemeId(null);
     openHomeSection("dashboard");
     refreshSyncStatus();
   }
 
   async function handleReview(item: ReviewQueueItem, grade: "again" | "hard" | "good" | "easy") {
     const token = `${item.lexemeId}:${grade}`;
+    const nextLexemeId = nextDeckLexemeAfterReview(item.lexemeId);
     setBusyGrade(token);
     try {
       const sessionId = await ensureSessionId();
       await submitLexemeReview(sessionId, item.lexemeId, grade, undefined, activeCourseKey());
       await refreshAll();
+      focusDeckCard(nextLexemeId);
       refreshSyncStatus();
     } finally {
       setBusyGrade(null);
@@ -547,6 +681,7 @@ function App() {
     const item = currentCard();
     if (!item) return;
     const isCorrect = answerLexemeId === item.lexemeId;
+    const nextLexemeId = nextDeckLexemeAfterReview(item.lexemeId);
     setBusyGrade(`quiz:${answerLexemeId}`);
     setQuizFeedback(isCorrect ? "정답이다. 다음 카드로 넘어간다." : "정답이 아니었다. 이 카드를 한 번 더 보자.");
     try {
@@ -559,6 +694,7 @@ function App() {
         activeCourseKey(),
       );
       await refreshAll();
+      focusDeckCard(nextLexemeId);
       refreshSyncStatus();
     } finally {
       setBusyGrade(null);
@@ -577,12 +713,14 @@ function App() {
     const target = matchingItems().find((item) => item.lexemeId === wordId);
     if (!target) return;
 
+    const nextLexemeId = nextDeckLexemeAfterReview(target.lexemeId);
     setMatchingBusy(true);
     setMatchingFeedback("정답이다. 같은 유닛의 다음 카드로 넘어간다.");
     try {
       const sessionId = await ensureSessionId();
       await submitLexemeReview(sessionId, target.lexemeId, "good", undefined, activeCourseKey());
       await refreshAll();
+      focusDeckCard(nextLexemeId);
       refreshSyncStatus();
     } finally {
       setMatchingBusy(false);
@@ -660,27 +798,61 @@ function App() {
   async function handleGenerateJapanesePack() {
     setGeneratingJapanesePack(true);
     setLlmStatus(null);
+    setGenerationProgress(0);
+    setGenerationMessage("AI 단어 꾸러미를 준비하는 중이다...");
     try {
-      const result = await generateJapaneseBoosterPack(boosterProfile(), boosterTheme(), 10);
+      await persistLlmSettingsIfNeeded();
+      const target = 100;
+      const collectedLexemeIds = new Set<number>();
+      let insertedTotal = 0;
+      let attachedTotal = 0;
+      let skippedTotal = 0;
+      let lastCourseKey: string | null = null;
+      let lastUnitTitle: string | null = null;
+      let lastThemeLabel: string | null = null;
+      let stalledRounds = 0;
+
+      while (collectedLexemeIds.size < target && stalledRounds < 3) {
+        const result = await generateJapaneseBoosterPack(boosterProfile(), boosterTheme(), 10);
+        lastCourseKey = result.courseKey;
+        lastUnitTitle = result.unitTitle;
+        lastThemeLabel = result.themeLabel;
+        const before = collectedLexemeIds.size;
+        result.generatedLexemeIds.forEach((lexemeId) => collectedLexemeIds.add(lexemeId));
+        const addedThisRound = collectedLexemeIds.size - before;
+        insertedTotal += result.insertedCount;
+        attachedTotal += result.attachedExistingCount;
+        skippedTotal += result.skippedCount;
+        setGenerationProgress(Math.min(100, Math.round((collectedLexemeIds.size / target) * 100)));
+        setGenerationMessage(
+          `${result.profileLabel} · ${result.themeLabel} 생성 중... ${collectedLexemeIds.size}/${target}개 카드 확보`,
+        );
+        stalledRounds = addedThisRound === 0 ? stalledRounds + 1 : 0;
+      }
+
       meaningWarmupBlockedKey = null;
-      setPreviewCourseKey(result.courseKey);
-      setSelectedCourseKey(result.courseKey);
+      if (lastCourseKey) {
+        setPreviewCourseKey(lastCourseKey);
+        setSelectedCourseKey(lastCourseKey);
+        rememberRecentCourse(lastCourseKey);
+      }
       await refreshAll();
       setLlmStatus(
-        `${result.profileLabel} · ${result.themeLabel} 보강 완료: 새 단어 ${result.insertedCount}개, 기존 단어 재사용 ${result.attachedExistingCount}개, 건너뜀 ${result.skippedCount}개. ${result.unitTitle} 유닛에 추가했다.`,
+        `${boosterProfiles.find((profile) => profile.key === boosterProfile())?.label ?? "AI"} · ${lastThemeLabel ?? boosterThemes.find((theme) => theme.key === boosterTheme())?.label ?? "주제"} 보강 완료: 카드 ${collectedLexemeIds.size}개 확보, 새 단어 ${insertedTotal}개, 기존 단어 재사용 ${attachedTotal}개, 건너뜀 ${skippedTotal}개. ${lastUnitTitle ?? "새 유닛"}까지 추가했다.`,
       );
-      if (result.generatedLexemeIds[0]) {
-        setSelectedId(result.generatedLexemeIds[0]);
+      if ([...collectedLexemeIds][0]) {
+        setSelectedId([...collectedLexemeIds][0]);
       }
       openHomeSection("courses");
     } catch (error) {
       setLlmStatus(String(error));
     } finally {
+      setGenerationMessage(null);
       setGeneratingJapanesePack(false);
     }
   }
 
-  async function handleGeneratedFeedback(rating: "good" | "bad") {
+  async function handleGeneratedFeedback(rating: GeneratedFeedbackRating) {
     const current = currentCard();
     const lexemeId = current?.lexemeId ?? selectedId();
     if (!lexemeId) return;
@@ -961,6 +1133,15 @@ function App() {
             </div>
             <p class="support-copy">{boosterThemes.find((theme) => theme.key === boosterTheme())?.description}</p>
           </div>
+          <Show when={generationMessage()}>
+            <div class="empty-state">
+              <strong>{generationMessage()}</strong>
+              <div class="progress-shell">
+                <div class="progress-bar" style={{ width: `${generationProgress()}%` }} />
+              </div>
+              <p class="support-copy">한 번 누르면 약 100개 카드가 쌓일 때까지 여러 번 생성 요청을 이어간다.</p>
+            </div>
+          </Show>
           <div class="inline-actions">
             <button class="action-button" disabled={generatingJapanesePack()} onClick={handleGenerateJapanesePack}>
               {generatingJapanesePack()
@@ -971,6 +1152,21 @@ function App() {
               진행 중 학습으로 이동
             </button>
           </div>
+
+          <Show when={recentCourseOptions().length > 0}>
+            <div class="page-stack compact-stack">
+              <p class="panel-kicker">최근 코스</p>
+              <div class="inline-actions wrap-actions">
+                <For each={recentCourseOptions()}>
+                  {(option) => (
+                    <button class="action-button" onClick={() => void handleStartCourse(option)}>
+                      {option.name}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
 
           <Show when={remoteLoadError()}>
             <div class="empty-state error">{remoteLoadError()}</div>
@@ -1403,14 +1599,31 @@ function App() {
         </Show>
       </section>
 
-      <section class="study-grid">
+      <section class="section-switcher panel">
+        <button class={`mode-tab ${studyPanel() === "flash" ? "active" : ""}`} onClick={() => openStudyPanel("flash")}>
+          카드
+        </button>
+        <button class={`mode-tab ${studyPanel() === "review" ? "active" : ""}`} onClick={() => openStudyPanel("review")}>
+          복습 덱
+        </button>
+        <button class={`mode-tab ${studyPanel() === "detail" ? "active" : ""}`} onClick={() => openStudyPanel("detail")}>
+          단어 설명
+        </button>
+        <button class={`mode-tab ${studyPanel() === "progress" ? "active" : ""}`} onClick={() => openStudyPanel("progress")}>
+          코스 진도
+        </button>
+      </section>
+
+      <section class="study-grid study-focus-grid">
         <div class="page-stack">
-          <section class="panel">
+          <Show when={studyPanel() === "flash"}>
+      <section class="panel">
             <div class="panel-head compact">
               <div>
                 <p class="panel-kicker">학습 모드</p>
                 <h2>한 번에 한 가지에 집중</h2>
               </div>
+              <span class="status-pill">카드 {currentCardPosition()}/{currentDeckCount()}</span>
             </div>
 
             <div class="mode-tabs">
@@ -1429,7 +1642,11 @@ function App() {
               when={currentCard()}
               fallback={
                 <div class="empty-state">
-                  <p>학습할 카드가 없다. 코스를 먼저 고르거나 일본어 AI 보강으로 새 단어를 채워보자.</p>
+                  <p>
+                    {filteredDueReviews().length === 0 && (dueReviews.latest?.length ?? 0) > 0
+                      ? `현재 필터(${reviewFilterLabel(reviewDifficultyFilter())})에 맞는 카드가 없다. 복습 덱에서 다른 난이도 필터를 골라보자.`
+                      : "학습할 카드가 없다. 코스를 먼저 고르거나 일본어 AI 보강으로 새 단어를 채워보자."}
+                  </p>
                   <Show when={llmForm().enabled}>
                     <button class="action-button" disabled={generatingJapanesePack()} onClick={handleGenerateJapanesePack}>
                       {generatingJapanesePack() ? "생성 중..." : "일본어 AI 단어 보강"}
@@ -1446,6 +1663,9 @@ function App() {
                     <Show when={item().isNew}>
                       <span class="badge">처음 보는 카드</span>
                     </Show>
+                    <Show when={reviewDifficultyFilter() !== "all"}>
+                      <span class="badge muted">필터: {reviewFilterLabel(reviewDifficultyFilter())}</span>
+                    </Show>
                   </div>
 
                   <div class="lesson-top">
@@ -1457,6 +1677,21 @@ function App() {
                     </div>
                     <button class="tts-button" onClick={() => void handleSpeak(item().displayForm, detail.latest?.language ?? activeCourse()?.language ?? "ja")}>
                       발음 듣기
+                    </button>
+                  </div>
+
+                  <div class="inline-actions wrap-actions">
+                    <button class="action-button" disabled={currentDeckCount() <= 1} onClick={() => moveDeckCard(-1)}>
+                      이전 카드
+                    </button>
+                    <button class="action-button" disabled={currentDeckCount() <= 1} onClick={() => moveDeckCard(1)}>
+                      다음 카드
+                    </button>
+                    <button class="action-button" disabled={currentDeckCount() <= 1} onClick={jumpRandomDeckCard}>
+                      랜덤
+                    </button>
+                    <button class="action-button" onClick={() => openStudyPanel("review")}>
+                      덱 보기
                     </button>
                   </div>
 
@@ -1572,8 +1807,9 @@ function App() {
               )}
             </Show>
           </section>
+          </Show>
 
-          <Show when={lessonMode() === "quiz"}>
+          <Show when={studyPanel() === "review" && lessonMode() === "quiz"}>
           <section class="panel">
             <div class="panel-head compact">
               <div>
@@ -1628,7 +1864,7 @@ function App() {
         </div>
 
         <div class="page-stack">
-          <Show when={lessonMode() !== "sentence"}>
+          <Show when={studyPanel() === "progress" && lessonMode() !== "sentence"}>
           <section class="panel">
             <div class="panel-head compact">
               <div>
@@ -1661,7 +1897,7 @@ function App() {
           </section>
           </Show>
 
-          <Show when={lessonMode() !== "sentence"}>
+          <Show when={studyPanel() === "review" && lessonMode() !== "sentence"}>
           <section class="panel">
             <div class="panel-head compact">
               <div>
@@ -1670,14 +1906,34 @@ function App() {
               </div>
             </div>
 
-            <Show when={(dueReviews.latest?.length ?? 0) > 0} fallback={<div class="empty-state">아직 학습할 카드가 없다.</div>}>
+            <div class="mode-tabs review-filter-tabs">
+              <For each={[
+                ["all", "전체"],
+                ["new", "새 카드"],
+                ["learning", "학습 중"],
+                ["reviewing", "복습 중"],
+                ["relearning", "어려움"],
+              ] as const}>
+                {([key, label]) => (
+                  <button
+                    class={`mode-tab ${reviewDifficultyFilter() === key ? "active" : ""}`}
+                    onClick={() => setReviewDifficultyFilter(key)}
+                  >
+                    {label}
+                  </button>
+                )}
+              </For>
+            </div>
+            <p class="support-copy">현재 필터에서 {currentDeckCount()}개 카드가 바로 보인다.</p>
+
+            <Show when={filteredDueReviews().length > 0} fallback={<div class="empty-state">이 필터에 맞는 카드가 없다. 다른 난이도 필터를 골라보자.</div>}>
               <div class="queue-list">
-                <For each={dueReviews.latest ?? []}>
+                <For each={filteredDueReviews()}>
                   {(item) => (
                     <article class="queue-card">
                       <div class="queue-head">
                         <div>
-                          <button class="queue-link" onClick={() => setSelectedId(item.lexemeId)}>
+                          <button class="queue-link" onClick={() => { setManualCardLexemeId(item.lexemeId); setSelectedId(item.lexemeId); openStudyPanel("flash"); }}>
                             {item.displayForm}
                           </button>
                           <Show when={item.reading}>
@@ -1701,6 +1957,7 @@ function App() {
           </section>
           </Show>
 
+          <Show when={studyPanel() === "detail"}>
           <section class="panel">
             <div class="panel-head compact">
               <div>
@@ -1738,22 +1995,19 @@ function App() {
                       </article>
                     </Show>
                     <Show when={inferBoosterProfileFromCourseKey(activeCourseKey())}>
-                      <div class="inline-actions">
-                        <button
-                          class="action-button"
-                          disabled={submittingFeedback() !== null}
-                          onClick={() => void handleGeneratedFeedback("good")}
-                        >
-                          {submittingFeedback() === "good" ? "저장 중..." : "이 생성 좋음"}
-                        </button>
-                        <button
-                          class="action-button"
-                          disabled={submittingFeedback() !== null}
-                          onClick={() => void handleGeneratedFeedback("bad")}
-                        >
-                          {submittingFeedback() === "bad" ? "저장 중..." : "이 생성 아쉬움"}
-                        </button>
-                      </div>
+                       <div class="inline-actions wrap-actions">
+                         <For each={["good", "too_easy", "too_hard", "inaccurate"] as const}>
+                           {(rating) => (
+                             <button
+                               class="action-button"
+                               disabled={submittingFeedback() !== null}
+                               onClick={() => void handleGeneratedFeedback(rating)}
+                             >
+                               {submittingFeedback() === rating ? "저장 중..." : feedbackRatingLabel(rating)}
+                             </button>
+                           )}
+                         </For>
+                       </div>
                     </Show>
                     <Show when={feedbackStatus()}>
                       <p class="feedback-text">{feedbackStatus()}</p>
@@ -1797,6 +2051,7 @@ function App() {
               )}
             </Show>
           </section>
+          </Show>
         </div>
       </section>
     </div>

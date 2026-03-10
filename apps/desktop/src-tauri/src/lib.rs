@@ -1454,8 +1454,10 @@ fn save_generated_lexeme_feedback(
     rating: &str,
     note: Option<&str>,
 ) -> anyhow::Result<GeneratedLexemeFeedbackResult> {
-    if !matches!(rating, "good" | "bad") {
-        anyhow::bail!("feedback rating must be 'good' or 'bad'");
+    if !matches!(rating, "good" | "too_easy" | "too_hard" | "inaccurate") {
+        anyhow::bail!(
+            "feedback rating must be one of 'good', 'too_easy', 'too_hard', or 'inaccurate'"
+        );
     }
 
     let profile_id = ensure_default_profile(conn)?;
@@ -1493,10 +1495,20 @@ fn save_generated_lexeme_feedback(
         rating: rating.to_string(),
         profile_key: profile_key.map(ToOwned::to_owned),
         theme_key: theme_key.map(ToOwned::to_owned),
-        message: if rating == "good" {
-            "이 단어를 좋은 AI 생성 예시로 저장했다.".to_string()
-        } else {
-            "이 단어를 아쉬운 AI 생성 예시로 저장했다. 다음 생성에서 피하도록 반영한다.".to_string()
+        message: match rating {
+            "good" => "이 단어를 좋은 AI 생성 예시로 저장했다.".to_string(),
+            "too_easy" => {
+                "이 단어를 너무 쉬운 카드로 저장했다. 다음 생성에서는 난도를 조금 올리겠다."
+                    .to_string()
+            }
+            "too_hard" => {
+                "이 단어를 너무 어려운 카드로 저장했다. 다음 생성에서는 난도를 조금 낮추겠다."
+                    .to_string()
+            }
+            _ => {
+                "이 단어를 뜻이 부정확한 예시로 저장했다. 다음 생성에서 의미 정확도를 더 엄격하게 보겠다."
+                    .to_string()
+            }
         },
     })
 }
@@ -1557,24 +1569,53 @@ fn load_feedback_prompt_guidance(
         Some(theme_key),
         "good",
     )?;
-    let disliked =
-        load_feedback_surfaces(content, progress, Some(profile_key), Some(theme_key), "bad")?;
+    let too_easy = load_feedback_surfaces(
+        content,
+        progress,
+        Some(profile_key),
+        Some(theme_key),
+        "too_easy",
+    )?;
+    let too_hard = load_feedback_surfaces(
+        content,
+        progress,
+        Some(profile_key),
+        Some(theme_key),
+        "too_hard",
+    )?;
+    let inaccurate = load_feedback_surfaces(
+        content,
+        progress,
+        Some(profile_key),
+        Some(theme_key),
+        "inaccurate",
+    )?;
 
-    if liked.is_empty() && disliked.is_empty() {
+    if liked.is_empty() && too_easy.is_empty() && too_hard.is_empty() && inaccurate.is_empty() {
         return Ok("이전 생성 피드백 없음".to_string());
     }
 
     Ok(format!(
-        "좋은 예시로 저장된 단어: {}\n피해야 할 예시로 저장된 단어: {}",
+        "좋은 예시로 저장된 단어: {}\n너무 쉬운 예시로 저장된 단어: {}\n너무 어려운 예시로 저장된 단어: {}\n뜻이 부정확한 예시로 저장된 단어: {}",
         if liked.is_empty() {
             "없음".to_string()
         } else {
             liked.join(", ")
         },
-        if disliked.is_empty() {
+        if too_easy.is_empty() {
             "없음".to_string()
         } else {
-            disliked.join(", ")
+            too_easy.join(", ")
+        },
+        if too_hard.is_empty() {
+            "없음".to_string()
+        } else {
+            too_hard.join(", ")
+        },
+        if inaccurate.is_empty() {
+            "없음".to_string()
+        } else {
+            inaccurate.join(", ")
         }
     ))
 }
@@ -2311,6 +2352,24 @@ fn attach_lexeme_to_unit(
     Ok(inserted > 0)
 }
 
+fn course_contains_lexeme(
+    conn: &Connection,
+    course_id: i64,
+    lexeme_id: i64,
+) -> anyhow::Result<bool> {
+    let count: i64 = conn.query_row(
+        "
+        SELECT COUNT(*)
+        FROM course_units cu
+        JOIN unit_items ui ON ui.unit_id = cu.id AND ui.item_type = 'lexeme'
+        WHERE cu.course_id = ?1 AND ui.item_id = ?2
+        ",
+        params![course_id, lexeme_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
 fn find_existing_lexeme_id(
     conn: &Connection,
     language_id: i64,
@@ -2566,6 +2625,10 @@ fn generate_japanese_booster_pack_inner(
 
         let lexeme_id =
             if let Some(existing_id) = find_existing_lexeme_id(&tx, language_id, &surface)? {
+                if course_contains_lexeme(&tx, course_id, existing_id)? {
+                    skipped_count += 1;
+                    continue;
+                }
                 let attached = attach_lexeme_to_unit(&tx, unit_id, existing_id, item_order)?;
                 if attached {
                     attached_existing_count += 1;

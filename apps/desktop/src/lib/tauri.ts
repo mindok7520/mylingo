@@ -209,6 +209,8 @@ export type GeneratedLexemeFeedbackResult = {
   message: string;
 };
 
+export type GeneratedFeedbackRating = "good" | "too_easy" | "too_hard" | "inaccurate";
+
 type RemoteCacheState = {
   version: number;
   dashboard?: DashboardSnapshot;
@@ -844,7 +846,7 @@ export async function recommendJapaneseBooster() {
 
 export async function submitGeneratedLexemeFeedback(
   lexemeId: number,
-  rating: "good" | "bad",
+  rating: GeneratedFeedbackRating,
   profileKey?: string,
   themeKey?: string,
 ) {
